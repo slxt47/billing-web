@@ -1,0 +1,83 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rechnung_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rechnung}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rechnung_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-rechnung}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rechnung} -d ${POSTGRES_DB:-rechnung}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: ./backend
+    container_name: rechnung_web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rechnung}:${POSTGRES_PASSWORD:-rechnung_pw}@db:5432/${POSTGRES_DB:-rechnung}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      APP_USERS: ${APP_USERS:-anna:passwort1,bernd:passwort2,clara:passwort3}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      MAIL_FROM: ${MAIL_FROM:-rechnung@example.com}
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+
+  # SMTP-Testserver: nimmt Mails an und zeigt sie im Web-UI (kein echter Versand)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: rechnung_mailhog
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_UI_PORT:-8025}:8025"   # Web-UI: http://localhost:8025
+
+  # Reverse-Proxy: rechnungen.localhost -> App, mail.localhost -> MailHog
+  proxy:
+    image: nginx:alpine
+    container_name: rechnung_proxy
+    restart: unless-stopped
+    depends_on:
+      - web
+      - mailhog
+    ports:
+      - "${PROXY_PORT:-80}:80"
+      - "${PROXY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+
+  # Automatisches tägliches Datenbank-Backup (pg_dump), hält die letzten 14
+  backup:
+    image: postgres:16-alpine
+    container_name: rechnung_backup
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-rechnung}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-rechnung_pw}
+      PGDATABASE: ${POSTGRES_DB:-rechnung}
+    volumes:
+      - ./backups:/backups
+    command:
+      - sh
+      - -c
+      - 'while true; do ts=$$(date +%Y%m%d_%H%M%S); echo "[backup] $$ts"; if pg_dump > /backups/rechnung_$$ts.sql 2> /backups/last_error.log; then gzip -f /backups/rechnung_$$ts.sql; else echo "[backup] FEHLER - siehe last_error.log"; fi; ls -1t /backups/*.sql.gz 2>/dev/null | tail -n +15 | xargs -r rm -f; sleep 86400; done'
+
+volumes:
+  db_data:

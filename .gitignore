@@ -1,0 +1,6 @@
+# Geheimnisse & lokale Daten
+.env
+nginx/certs/
+backups/
+__pycache__/
+*.pyc

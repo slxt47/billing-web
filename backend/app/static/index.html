@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rechnungs-App</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="/static/favicon.ico">
+</head>
+<body>
+  <header>
+    <h1>🧾 Rechnungs-App</h1>
+    <nav>
+      <button id="nav-dashboard">Dashboard</button>
+      <button id="nav-new" class="active">Neue Rechnung</button>
+      <button id="nav-history">History</button>
+      <button id="nav-customers">Kunden</button>
+      <button id="nav-products">Artikel</button>
+      <button id="nav-settings" hidden>Firma</button>
+      <button id="nav-users" hidden>Benutzer</button>
+      <button id="theme-toggle" class="icon-btn" title="Hell/Dunkel umschalten">🌙</button>
+      <span class="nav-user">👤 <span id="current-user">…</span></span>
+      <a id="logout" href="/logout" title="Abmelden">Abmelden</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ DASHBOARD ============ -->
+    <section id="view-dashboard" hidden>
+      <h2>Dashboard</h2>
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <h3>Umsatz der letzten 6 Monate</h3>
+      <div id="chart" class="chart"></div>
+    </section>
+
+    <!-- ============ NEUE RECHNUNG ============ -->
+    <section id="view-new">
+      <h2>Neue Rechnung erstellen</h2>
+      <form id="invoice-form">
+        <label>Gespeicherter Kunde
+          <select id="customer-select">
+            <option value="">– neuen Kunden eingeben –</option>
+          </select>
+        </label>
+
+        <div class="grid">
+          <label>Kundenname *
+            <input type="text" name="customer_name" required>
+          </label>
+          <label>MwSt. (%)
+            <input type="number" name="tax_rate" value="20" min="0" max="100" step="0.1">
+          </label>
+          <label>Rechnungsdatum (immer heute)
+            <input type="date" name="issue_date" readonly>
+          </label>
+          <label>Fällig am
+            <input type="date" name="due_date">
+          </label>
+          <label>Rabatt (%) – optional
+            <input type="number" name="discount_percent" value="0" min="0" max="100" step="0.1">
+          </label>
+          <label>Skonto (%) – optional
+            <input type="number" name="skonto_percent" value="0" min="0" max="100" step="0.1">
+          </label>
+          <label>Skonto innerhalb (Tage)
+            <input type="number" name="skonto_days" value="0" min="0" step="1">
+          </label>
+        </div>
+        <label>Kundenadresse
+          <textarea name="customer_address" rows="3" placeholder="Straße, PLZ Ort"></textarea>
+        </label>
+        <label class="inline">
+          <input type="checkbox" name="small_business"> Kleinunternehmer (§19 UStG – keine MwSt.)
+        </label>
+        <label class="inline">
+          <input type="checkbox" id="save-customer"> Diesen Kunden für später speichern
+        </label>
+
+        <h3>Positionen</h3>
+        <p class="hint">Tipp: In „Beschreibung" kannst du einen gespeicherten Artikel
+          auswählen (Preis wird übernommen) oder einfach frei tippen.</p>
+        <datalist id="product-list"></datalist>
+        <table id="items-table">
+          <thead>
+            <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis (€)</th><th>Summe</th><th></th></tr>
+          </thead>
+          <tbody id="items-body"></tbody>
+        </table>
+        <button type="button" id="add-item" class="secondary">+ Position</button>
+
+        <label>Hinweise
+          <textarea name="notes" rows="2"></textarea>
+        </label>
+
+        <div class="totals" id="form-totals"></div>
+        <button type="submit" class="primary">Rechnung speichern</button>
+        <span id="form-msg"></span>
+      </form>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section id="view-history" hidden>
+      <h2>History</h2>
+      <div class="bar">
+        <input type="search" id="search" placeholder="Suche nach Nummer oder Kunde…">
+        <select id="filter-status">
+          <option value="">Alle Status</option>
+          <option value="offen">offen</option>
+          <option value="teilbezahlt">teilbezahlt</option>
+          <option value="bezahlt">bezahlt</option>
+          <option value="storniert">storniert</option>
+          <option value="__overdue">überfällig</option>
+        </select>
+        <span class="export-group">
+          <input type="month" id="export-month">
+          <button id="export-btn" class="secondary">⬇️ Monat exportieren (ZIP)</button>
+        </span>
+      </div>
+      <table id="history-table">
+        <thead>
+          <tr>
+            <th data-sort="number">Nummer</th>
+            <th data-sort="customer_name">Kunde</th>
+            <th data-sort="issue_date">Datum</th>
+            <th data-sort="total" class="col-num">Betrag</th>
+            <th data-sort="remaining" class="col-num">Offen</th>
+            <th data-sort="status">Status</th>
+            <th>Aktionen</th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+      <p id="history-empty" hidden>Keine Rechnungen gefunden.</p>
+    </section>
+
+    <!-- ============ KUNDEN ============ -->
+    <section id="view-customers" hidden>
+      <h2>Stammkunden</h2>
+      <form id="customer-form">
+        <div class="grid">
+          <label>Name *
+            <input type="text" name="name" required>
+          </label>
+          <label>E-Mail
+            <input type="email" name="email" placeholder="kunde@example.com">
+          </label>
+          <label>Standard-Zahlungsfrist (Tage)
+            <input type="number" name="payment_term_days" value="14" min="0" step="1">
+          </label>
+          <label>Standard-Skonto (%) – optional
+            <input type="number" name="skonto_percent" value="0" min="0" max="100" step="0.1">
+          </label>
+          <label>Skonto innerhalb (Tage)
+            <input type="number" name="skonto_days" value="0" min="0" step="1">
+          </label>
+        </div>
+        <label>Anschrift
+          <textarea name="address" rows="3" placeholder="Straße, PLZ Ort"></textarea>
+        </label>
+        <button type="submit" class="primary">Kunde speichern</button>
+        <span id="customer-msg"></span>
+      </form>
+
+      <h3>Gespeicherte Kunden</h3>
+      <table id="customers-table">
+        <thead>
+          <tr><th>Name</th><th>E-Mail</th><th>Anschrift</th><th>Zahlungsfrist</th><th>Skonto</th><th></th></tr>
+        </thead>
+        <tbody id="customers-body"></tbody>
+      </table>
+      <p id="customers-empty" hidden>Noch keine Kunden gespeichert.</p>
+    </section>
+
+    <!-- ============ ARTIKEL / LEISTUNGEN ============ -->
+    <section id="view-products" hidden>
+      <h2>Artikel &amp; Leistungen</h2>
+      <p class="hint">Lege hier wiederkehrende Artikel/Leistungen mit Standardpreis an.
+        Beim Erstellen einer Rechnung kannst du sie auswählen – oder weiterhin frei tippen.</p>
+      <form id="product-form">
+        <div class="grid">
+          <label>Bezeichnung *
+            <input type="text" name="name" required>
+          </label>
+          <label>Standardpreis (€)
+            <input type="number" name="unit_price" value="0" min="0" step="0.01">
+          </label>
+        </div>
+        <button type="submit" class="primary">Artikel speichern</button>
+        <span id="product-msg"></span>
+      </form>
+
+      <h3>Gespeicherte Artikel</h3>
+      <table id="products-table">
+        <thead>
+          <tr><th>Bezeichnung</th><th>Standardpreis</th><th></th></tr>
+        </thead>
+        <tbody id="products-body"></tbody>
+      </table>
+      <p id="products-empty" hidden>Noch keine Artikel gespeichert.</p>
+    </section>
+
+    <!-- ============ FIRMA / EINSTELLUNGEN (nur Admin) ============ -->
+    <section id="view-settings" hidden>
+      <h2>Firmendaten</h2>
+      <p class="hint">Diese Angaben erscheinen als Absender auf jeder Rechnung (PDF),
+        inkl. Logo und – für den GiroCode/QR – der Bankverbindung.</p>
+      <form id="settings-form">
+        <div class="grid">
+          <label>Firmenname
+            <input type="text" name="company_name">
+          </label>
+          <label>E-Mail
+            <input type="email" name="email">
+          </label>
+          <label>Telefon
+            <input type="text" name="phone">
+          </label>
+          <label>Steuernummer
+            <input type="text" name="tax_id">
+          </label>
+          <label>USt-IdNr.
+            <input type="text" name="vat_id">
+          </label>
+          <label>IBAN
+            <input type="text" name="iban" placeholder="DE..">
+          </label>
+          <label>BIC
+            <input type="text" name="bic">
+          </label>
+        </div>
+        <label>Anschrift
+          <textarea name="address" rows="3" placeholder="Straße, PLZ Ort"></textarea>
+        </label>
+        <button type="submit" class="primary">Firmendaten speichern</button>
+        <span id="settings-msg"></span>
+      </form>
+
+      <h3>Logo</h3>
+      <div class="logo-row">
+        <img id="logo-preview" alt="Logo" hidden>
+        <span id="logo-none" class="hint">Noch kein Logo hochgeladen.</span>
+        <input type="file" id="logo-input" accept="image/png,image/jpeg,image/gif">
+      </div>
+    </section>
+
+    <!-- ============ BENUTZER (nur Admin) ============ -->
+    <section id="view-users" hidden>
+      <h2>Benutzerverwaltung</h2>
+      <p class="hint">Lege neue Benutzer an oder verwalte bestehende. Alle Benutzer
+        greifen auf dieselben Rechnungsdaten zu. Admins dürfen Benutzer verwalten.</p>
+      <form id="user-form">
+        <div class="grid">
+          <label>Benutzername *
+            <input type="text" name="username" autocomplete="off" required>
+          </label>
+          <label>Passwort *
+            <input type="text" name="password" autocomplete="off" required minlength="4">
+          </label>
+        </div>
+        <label class="inline">
+          <input type="checkbox" id="user-is-admin"> Als Administrator anlegen
+        </label>
+        <button type="submit" class="primary">Benutzer anlegen</button>
+        <span id="user-msg"></span>
+      </form>
+
+      <h3>Vorhandene Benutzer</h3>
+      <table id="users-table">
+        <thead>
+          <tr><th>Benutzername</th><th>Rolle</th><th>Aktionen</th></tr>
+        </thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

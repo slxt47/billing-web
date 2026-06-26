@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anmelden – Rechnungs-App</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="/static/favicon.ico">
+</head>
+<body class="login-page">
+  <form class="login-card" method="post" action="/login">
+    <h1>🧾 Rechnungs-App</h1>
+    <p class="hint">Bitte anmelden</p>
+
+    <label>Benutzername
+      <input type="text" name="username" autocomplete="username" required autofocus>
+    </label>
+    <label>Passwort
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+
+    <button type="submit" class="primary">Anmelden</button>
+    <p id="login-error" class="err">Benutzername oder Passwort falsch.</p>
+  </form>
+
+  <script>
+    if (new URLSearchParams(location.search).get("error")) {
+      document.getElementById("login-error").style.display = "block";
+    }
+  </script>
+</body>
+</html>
