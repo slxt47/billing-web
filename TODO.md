@@ -81,3 +81,8 @@ RECHNUNGS-APP - DEVELOPMENT ROADMAP (TODO.md)
 [X] Limited user management
 [X] No invoice validation
 [X] No date validation
+
+
+
+HOME
+KUNDEN/ ARTIKEL BEARBEITEN. dynamisches updaten falls mehrere benutzer an einer rechnung arbieten. dsgvo konform. prod install funktion, extra admin funktion mittels backups wiederherstellen. Artikel/kunden aktivieren bzw. deativieren. bei neuladen nicht immer auf neue rehcnung sondern dashboard. und bei prod dann mit echtem email versand. 
