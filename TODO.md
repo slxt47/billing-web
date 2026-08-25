@@ -85,4 +85,5 @@ RECHNUNGS-APP - DEVELOPMENT ROADMAP (TODO.md)
 
 
 HOME
-KUNDEN/ ARTIKEL BEARBEITEN. dynamisches updaten falls mehrere benutzer an einer rechnung arbieten. dsgvo konform. prod install funktion, extra admin funktion mittels backups wiederherstellen. Artikel/kunden aktivieren bzw. deativieren. bei neuladen nicht immer auf neue rehcnung sondern dashboard. und bei prod dann mit echtem email versand. 
+KUNDEN/ ARTIKEL BEARBEITEN. dynamisches updaten falls mehrere benutzer an einer rechnung arbieten. dsgvo konform. prod install funktion, extra admin funktion mittels backups wiederherstellen. Artikel/kunden aktivieren bzw. deativieren. bei neuladen nicht immer auf neue rehcnung sondern dashboard. und bei prod dann mit echtem email versand. Maybe automatischer email versand, nach erstellung, funktion mit angebot schreiben, und nach erhalt der zahlung,wenn man au bezalt clickt.
+
