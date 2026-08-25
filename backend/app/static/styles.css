@@ -63,7 +63,7 @@ nav a#logout:hover { color: #fff; border-color: var(--red); background: var(--re
 .login-card h1 { margin: 0 0 0.2rem; font-size: 1.5rem; text-align: center; }
 .login-card .hint { text-align: center; }
 .login-card button { width: 100%; margin-top: 1rem; }
-.login-card #login-error { display: none; text-align: center; margin: 0.8rem 0 0; }
+.login-card #login-error, .login-card #login-locked { display: none; text-align: center; margin: 0.8rem 0 0; }
 
 main { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
 
@@ -197,6 +197,22 @@ label.inline input { width: auto; margin: 0; }
 /* Logo-Bereich */
 .logo-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
 #logo-preview { max-height: 70px; max-width: 200px; background: #fff; padding: 4px; border-radius: 6px; }
+
+/* Bearbeitungssperre / Warnhinweise */
+.warn-banner {
+  background: #2e2a16; color: var(--orange); border: 1px solid var(--orange);
+  border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem;
+}
+:root[data-theme="light"] .warn-banner { background: #fff3e0; }
+
+tr.inactive-row { opacity: 0.55; }
+.badge.inactive { background: #2a2f3a; color: var(--muted); }
+:root[data-theme="light"] .badge.inactive { background: #eceff3; }
+
+.app-footer {
+  max-width: 900px; margin: 0 auto 2rem; padding: 0 1rem;
+  text-align: center; font-size: 0.85rem;
+}
 
 /* ===== Light Mode ===== */
 :root[data-theme="light"] {

@@ -32,7 +32,13 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       SMTP_HOST: ${SMTP_HOST:-mailhog}
       SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       MAIL_FROM: ${MAIL_FROM:-rechnung@example.com}
+      BACKUP_DIR: /backups
+    volumes:
+      - ./backups:/backups:ro
     ports:
       - "${WEB_PORT:-8000}:8000"
 

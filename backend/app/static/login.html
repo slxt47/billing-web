@@ -21,11 +21,21 @@
 
     <button type="submit" class="primary">Anmelden</button>
     <p id="login-error" class="err">Benutzername oder Passwort falsch.</p>
+    <p id="login-locked" class="err"></p>
   </form>
 
   <script>
-    if (new URLSearchParams(location.search).get("error")) {
+    const params = new URLSearchParams(location.search);
+    if (params.get("error")) {
       document.getElementById("login-error").style.display = "block";
+    }
+    const locked = parseInt(params.get("locked"), 10);
+    if (locked > 0) {
+      const mins = Math.ceil(locked / 60);
+      const el = document.getElementById("login-locked");
+      el.textContent = `Zu viele Fehlversuche. Bitte in ca. ${mins} Minute${mins === 1 ? "" : "n"} erneut versuchen.`;
+      el.style.display = "block";
+      document.querySelector(".login-card button[type=submit]").disabled = true;
     }
   </script>
 </body>

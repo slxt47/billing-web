@@ -24,6 +24,7 @@ class Invoice(Base):
 
     customer_name = Column(String(200), nullable=False)
     customer_address = Column(Text, default="")
+    customer_contact_person = Column(String(200), default="")
 
     issue_date = Column(Date, nullable=False, default=date.today)
     due_date = Column(Date, nullable=True)
@@ -45,6 +46,11 @@ class Invoice(Base):
 
     # Zahlungseingang (für Teilzahlungen)
     paid_amount = Column(Numeric(12, 2), nullable=False, default=0)
+
+    # Bearbeitungssperre: verhindert, dass zwei Benutzer gleichzeitig dieselbe
+    # Rechnung bearbeiten. Läuft nach LOCK_TIMEOUT automatisch ab (siehe crud.py).
+    locked_by = Column(String(80), nullable=True)
+    locked_at = Column(DateTime, nullable=True)
 
     items = relationship(
         "InvoiceItem",
@@ -116,11 +122,13 @@ class Customer(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
     address = Column(Text, default="")
+    contact_person = Column(String(200), default="")
     email = Column(String(200), default="")
     # Standard-Zahlungsfrist in Tagen + optionale Skonto-Vorgabe
     payment_term_days = Column(Integer, nullable=False, default=14)
     skonto_percent = Column(Numeric(5, 2), nullable=False, default=0)
     skonto_days = Column(Integer, nullable=False, default=0)
+    active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -142,6 +150,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(300), nullable=False)
     unit_price = Column(Numeric(12, 2), nullable=False, default=0)
+    active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -177,3 +186,137 @@ class InvoiceItem(Base):
     @property
     def line_total(self):
         return round(float(self.quantity) * float(self.unit_price), 2)
+
+
+class AuditLog(Base):
+    """DSGVO-Protokoll: wer hat wann auf personenbezogene Daten zugegriffen."""
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    username = Column(String(80), nullable=False)
+    action = Column(String(80), nullable=False)
+    target_type = Column(String(40), nullable=False)
+    target_id = Column(Integer, nullable=True)
+    detail = Column(String(300), default="")
+
+
+# Mögliche Status eines Angebots
+QUOTE_OPEN = "offen"
+QUOTE_ACCEPTED = "angenommen"
+QUOTE_DECLINED = "abgelehnt"
+QUOTE_CONVERTED = "umgewandelt"
+
+
+class Quote(Base):
+    """Angebot – kann später in eine Rechnung umgewandelt werden."""
+    __tablename__ = "quotes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    number = Column(String(32), unique=True, nullable=False, index=True)
+
+    customer_name = Column(String(200), nullable=False)
+    customer_address = Column(Text, default="")
+    customer_contact_person = Column(String(200), default="")
+
+    issue_date = Column(Date, nullable=False, default=date.today)
+    valid_until = Column(Date, nullable=True)
+
+    tax_rate = Column(Numeric(5, 2), nullable=False, default=20)
+    discount_percent = Column(Numeric(5, 2), nullable=False, default=0)
+    small_business = Column(Boolean, nullable=False, default=False)
+    notes = Column(Text, default="")
+
+    status = Column(String(20), nullable=False, default=QUOTE_OPEN)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    converted_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+
+    items = relationship(
+        "QuoteItem",
+        back_populates="quote",
+        cascade="all, delete-orphan",
+        order_by="QuoteItem.id",
+    )
+
+    @property
+    def subtotal(self):
+        return round(sum((it.line_total for it in self.items), 0), 2)
+
+    @property
+    def discount_amount(self):
+        return round(self.subtotal * float(self.discount_percent or 0) / 100, 2)
+
+    @property
+    def net(self):
+        return round(self.subtotal - self.discount_amount, 2)
+
+    @property
+    def tax_amount(self):
+        if self.small_business:
+            return 0.0
+        return round(self.net * float(self.tax_rate) / 100, 2)
+
+    @property
+    def total(self):
+        return round(self.net + self.tax_amount, 2)
+
+
+class QuoteItem(Base):
+    __tablename__ = "quote_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    quote_id = Column(Integer, ForeignKey("quotes.id"), nullable=False)
+
+    description = Column(String(300), nullable=False)
+    quantity = Column(Numeric(10, 2), nullable=False, default=1)
+    unit_price = Column(Numeric(12, 2), nullable=False, default=0)
+
+    quote = relationship("Quote", back_populates="items")
+
+    @property
+    def line_total(self):
+        return round(float(self.quantity) * float(self.unit_price), 2)
+
+
+# Mögliche Status eines Lieferscheins
+DN_OPEN = "offen"
+DN_CANCELLED = "storniert"
+
+
+class DeliveryNote(Base):
+    """Lieferschein – reiner Liefernachweis (Beschreibung + Menge, keine
+    Preise), kann aus einer Rechnung erzeugt werden."""
+    __tablename__ = "delivery_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    number = Column(String(32), unique=True, nullable=False, index=True)
+
+    customer_name = Column(String(200), nullable=False)
+    customer_address = Column(Text, default="")
+    customer_contact_person = Column(String(200), default="")
+
+    issue_date = Column(Date, nullable=False, default=date.today)
+    notes = Column(Text, default="")
+
+    status = Column(String(20), nullable=False, default=DN_OPEN)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    source_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+
+    items = relationship(
+        "DeliveryNoteItem",
+        back_populates="delivery_note",
+        cascade="all, delete-orphan",
+        order_by="DeliveryNoteItem.id",
+    )
+
+
+class DeliveryNoteItem(Base):
+    __tablename__ = "delivery_note_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    delivery_note_id = Column(Integer, ForeignKey("delivery_notes.id"), nullable=False)
+
+    description = Column(String(300), nullable=False)
+    quantity = Column(Numeric(10, 2), nullable=False, default=1)
+
+    delivery_note = relationship("DeliveryNote", back_populates="items")

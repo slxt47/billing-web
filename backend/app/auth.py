@@ -14,7 +14,7 @@ import time
 from starlette.requests import Request
 
 # Pfade, die ohne Anmeldung erreichbar sind
-PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/health", "/favicon")
+PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/health", "/favicon", "/datenschutz")
 
 _ITERATIONS = 200_000
 

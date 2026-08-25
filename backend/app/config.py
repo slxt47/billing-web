@@ -24,3 +24,12 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
 SMTP_HOST = os.getenv("SMTP_HOST", "mailhog")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
 MAIL_FROM = os.getenv("MAIL_FROM", "rechnung@example.com")
+# Für echten Versand in Produktion (z.B. über einen SMTP-Provider): Benutzername/
+# Passwort setzen. Bleiben sie leer, wird weiter unauthentifiziert an MailHog
+# gesendet (nur für lokale Entwicklung geeignet).
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "false").lower() in ("1", "true", "yes")
+
+# Ordner der automatischen täglichen DB-Backups (siehe docker-compose.yml)
+BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
