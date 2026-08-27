@@ -11,7 +11,11 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg://rechnung:rechnung_pw@db:5432/rechnung",
 )
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# check_same_thread ist nur für SQLite relevant (Testsuite): der TestClient
+# arbeitet mit mehreren Threads auf derselben Verbindung.
+_ENGINE_ARGS = ({"connect_args": {"check_same_thread": False}}
+                if DATABASE_URL.startswith("sqlite") else {})
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, **_ENGINE_ARGS)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -64,6 +68,10 @@ _MIGRATIONS = [
 
 
 def _migrate():
+    # "ADD COLUMN IF NOT EXISTS" gibt es nur in PostgreSQL. Gegen SQLite
+    # (Testsuite) legt create_all() ohnehin schon das aktuelle Schema an.
+    if engine.dialect.name != "postgresql":
+        return
     with engine.begin() as conn:
         for stmt in _MIGRATIONS:
             conn.execute(text(stmt))

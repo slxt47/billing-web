@@ -3,13 +3,16 @@ import io
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, Depends, HTTPException, Form, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Form, Query, Request, UploadFile, File
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
-from . import crud, models, schemas, pdf, auth, email_service, config, backup
+from . import (crud, models, schemas, pdf, auth, email_service, config, backup,
+               security, logging_setup)
 from .database import get_db, init_db, SessionLocal
 
 app = FastAPI(title="Rechnungs-App")
@@ -22,12 +25,18 @@ VALID_DN_STATUS = {models.DN_OPEN, models.DN_CANCELLED}
 
 @app.on_event("startup")
 def on_startup():
+    logging_setup.setup_logging()
     init_db()
     db = SessionLocal()
     try:
         crud.seed_users(db)
     finally:
         db.close()
+    logging_setup.log.info("startup complete", extra={"fields": {
+        "csrf": config.CSRF_ENABLED,
+        "rate_limit": config.RATE_LIMIT_REQUESTS,
+        "https_only_cookies": config.SESSION_HTTPS_ONLY,
+    }})
 
 
 def require_admin(request: Request, db: Session = Depends(get_db)) -> models.User:
@@ -40,8 +49,8 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> models.Use
 
 
 # --------------------------- Auth-Schutz --------------------------------
-# Reihenfolge wichtig: SessionMiddleware wird zuletzt hinzugefügt und läuft
-# damit zuerst, sodass request.session in der Auth-Prüfung verfügbar ist.
+# Innerste Middleware: läuft erst, wenn Session und CSRF-Prüfung durch sind,
+# sodass request.session hier bereits verfügbar ist.
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
@@ -52,7 +61,25 @@ async def require_login(request: Request, call_next):
     return RedirectResponse("/login")
 
 
-app.add_middleware(SessionMiddleware, secret_key=config.SESSION_SECRET)
+# Von innen nach außen: Login-Prüfung -> CSRF -> Session -> Rate-Limit ->
+# Sicherheits-Header -> Request-ID/Logging. Starlette führt die zuletzt
+# registrierte Middleware zuerst aus, deshalb ist die Reihenfolge hier
+# genau umgekehrt zur Durchlaufreihenfolge.
+app.middleware("http")(security.csrf_middleware)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=config.SESSION_SECRET,
+    same_site="strict",
+    https_only=config.SESSION_HTTPS_ONLY,
+    max_age=config.SESSION_MAX_AGE,
+)
+app.middleware("http")(security.rate_limit_middleware)
+app.middleware("http")(security.security_headers_middleware)
+app.middleware("http")(logging_setup.request_context_middleware)
+
+app.add_exception_handler(StarletteHTTPException, logging_setup.http_exception_handler)
+app.add_exception_handler(RequestValidationError, logging_setup.validation_exception_handler)
+app.add_exception_handler(Exception, logging_setup.unhandled_exception_handler)
 
 
 # --------------------------- Login / Logout -----------------------------
@@ -63,16 +90,25 @@ def login_page():
 
 @app.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...),
-          db: Session = Depends(get_db)):
+          csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    # Der Login läuft als klassisches Formular, das Token steckt deshalb im
+    # Formularfeld statt im Header (die Middleware lässt /login durch).
+    if config.CSRF_ENABLED and not security.csrf_token_valid(request, csrf_token):
+        return RedirectResponse("/login?csrf=1", status_code=303)
     key = (request.client.host if request.client else "?") + "|" + username
     wait = auth.is_locked(key)
     if wait:
         return RedirectResponse(f"/login?locked={wait}", status_code=303)
     if crud.authenticate(db, username, password):
         auth.reset_failures(key)
+        # Session-Fixation vermeiden: alles Alte verwerfen, frisches CSRF-Token
+        request.session.clear()
         request.session["user"] = username
+        security.ensure_csrf_token(request)
+        logging_setup.log.info("login", extra={"fields": {"user": username}})
         return RedirectResponse("/", status_code=303)
     auth.register_failure(key)
+    logging_setup.log.warning("login failed", extra={"fields": {"user": username}})
     return RedirectResponse("/login?error=1", status_code=303)
 
 
@@ -84,10 +120,11 @@ def logout(request: Request):
 
 @app.get("/api/me")
 def me(request: Request, db: Session = Depends(get_db)):
+    token = security.ensure_csrf_token(request)
     user = crud.get_user(db, auth.current_user(request))
     if not user:
-        return {"user": None, "is_admin": False}
-    return {"user": user.username, "is_admin": user.is_admin}
+        return {"user": None, "is_admin": False, "csrf_token": token}
+    return {"user": user.username, "is_admin": user.is_admin, "csrf_token": token}
 
 
 # --------------------------- Benutzerverwaltung (nur Admin) -------------
@@ -132,9 +169,23 @@ def delete_user(user_id: int, admin: models.User = Depends(require_admin),
 
 
 # --------------------------- API ----------------------------------------
+# Listen-Endpunkte unterstützen ?limit=&offset=. Ohne Parameter kommt weiterhin
+# die vollständige Liste – die Gesamtzahl steht immer im Header X-Total-Count.
+Limit = Query(None, ge=1, description="Maximale Anzahl Zeilen (optional)")
+Offset = Query(0, ge=0, description="Zu überspringende Zeilen")
+
+
+def _with_total(response: Response, rows_and_total: tuple[list, int]) -> list:
+    rows, total = rows_and_total
+    response.headers["X-Total-Count"] = str(total)
+    return rows
+
+
 @app.get("/api/invoices", response_model=list[schemas.InvoiceOut])
-def list_invoices(search: str | None = None, db: Session = Depends(get_db)):
-    return crud.list_invoices(db, search)
+def list_invoices(response: Response, search: str | None = None,
+                  limit: int | None = Limit, offset: int = Offset,
+                  db: Session = Depends(get_db)):
+    return _with_total(response, crud.list_invoices(db, search, limit, offset))
 
 
 @app.post("/api/invoices", response_model=schemas.InvoiceOut, status_code=201)
@@ -213,7 +264,10 @@ def update_status(invoice_id: int, body: schemas.StatusUpdate,
         raise HTTPException(404, "Rechnung nicht gefunden")
     if body.status not in VALID_STATUS:
         raise HTTPException(400, f"Ungültiger Status: {body.status}")
-    return crud.set_status(db, invoice, body.status)
+    was_paid = invoice.status == models.STATUS_PAID
+    invoice = crud.set_status(db, invoice, body.status)
+    _confirm_payment_if_settled(db, invoice, was_paid)
+    return invoice
 
 
 @app.delete("/api/invoices/{invoice_id}", status_code=204)
@@ -223,6 +277,33 @@ def delete_invoice(invoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Rechnung nicht gefunden")
     crud.delete_invoice(db, invoice)
     return Response(status_code=204)
+
+
+def _confirm_payment_if_settled(db: Session, invoice: models.Invoice,
+                                was_paid: bool) -> None:
+    """Zahlungsbestätigung verschicken, sobald eine Rechnung vollständig
+    beglichen ist – unabhängig davon, ob das über die Zahlungserfassung oder
+    durch direktes Setzen des Status auf "bezahlt" passiert ist. Vorher hing
+    die Mail nur am Zahlungs-Endpunkt, sodass der Kunde je nach Klickweg eine
+    Bestätigung bekam oder eben nicht.
+
+    Best effort: ein fehlgeschlagener Versand darf den Vorgang nicht
+    abbrechen, wird aber protokolliert.
+    """
+    if was_paid or invoice.status != models.STATUS_PAID:
+        return
+    customer = db.query(models.Customer).filter(
+        models.Customer.name == invoice.customer_name).first()
+    if not (customer and customer.email):
+        return
+    try:
+        email_service.send_payment_confirmation(invoice, customer.email,
+                                                crud.get_settings(db))
+        logging_setup.log.info("payment confirmation sent", extra={"fields": {
+            "invoice": invoice.number, "to": customer.email}})
+    except OSError as err:
+        logging_setup.log.warning("payment confirmation failed", extra={"fields": {
+            "invoice": invoice.number, "error": str(err)}})
 
 
 @app.post("/api/invoices/{invoice_id}/payment", response_model=schemas.InvoiceOut)
@@ -235,14 +316,7 @@ def add_payment(invoice_id: int, body: schemas.PaymentRequest,
         raise HTTPException(400, "Stornierte Rechnung kann nicht bezahlt werden")
     was_paid = invoice.status == models.STATUS_PAID
     invoice = crud.add_payment(db, invoice, body.amount)
-    if invoice.status == models.STATUS_PAID and not was_paid:
-        customer = db.query(models.Customer).filter(
-            models.Customer.name == invoice.customer_name).first()
-        if customer and customer.email:
-            try:
-                email_service.send_payment_confirmation(invoice, customer.email, crud.get_settings(db))
-            except OSError:
-                pass
+    _confirm_payment_if_settled(db, invoice, was_paid)
     return invoice
 
 
@@ -336,8 +410,11 @@ def export_month(month: str, db: Session = Depends(get_db)):
 
 # --------------------------- Kunden -------------------------------------
 @app.get("/api/customers", response_model=list[schemas.CustomerOut])
-def list_customers(active_only: bool = False, db: Session = Depends(get_db)):
-    return crud.list_customers(db, active_only)
+def list_customers(response: Response, active_only: bool = False,
+                   search: str | None = None, limit: int | None = Limit,
+                   offset: int = Offset, db: Session = Depends(get_db)):
+    return _with_total(response,
+                       crud.list_customers(db, active_only, search, limit, offset))
 
 
 @app.post("/api/customers", response_model=schemas.CustomerOut, status_code=201)
@@ -403,8 +480,11 @@ def delete_customer(customer_id: int, db: Session = Depends(get_db)):
 
 # --------------------------- Artikel / Leistungen -----------------------
 @app.get("/api/products", response_model=list[schemas.ProductOut])
-def list_products(active_only: bool = False, db: Session = Depends(get_db)):
-    return crud.list_products(db, active_only)
+def list_products(response: Response, active_only: bool = False,
+                  search: str | None = None, limit: int | None = Limit,
+                  offset: int = Offset, db: Session = Depends(get_db)):
+    return _with_total(response,
+                       crud.list_products(db, active_only, search, limit, offset))
 
 
 @app.post("/api/products", response_model=schemas.ProductOut, status_code=201)
@@ -440,8 +520,10 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
 
 # --------------------------- Angebote (Quotes) ---------------------------
 @app.get("/api/quotes", response_model=list[schemas.QuoteOut])
-def list_quotes(db: Session = Depends(get_db)):
-    return crud.list_quotes(db)
+def list_quotes(response: Response, search: str | None = None,
+                limit: int | None = Limit, offset: int = Offset,
+                db: Session = Depends(get_db)):
+    return _with_total(response, crud.list_quotes(db, search, limit, offset))
 
 
 @app.post("/api/quotes", response_model=schemas.QuoteOut, status_code=201)
@@ -524,8 +606,11 @@ def convert_quote(quote_id: int, db: Session = Depends(get_db)):
 
 # --------------------------- Lieferscheine (Delivery Notes) --------------
 @app.get("/api/delivery-notes", response_model=list[schemas.DeliveryNoteOut])
-def list_delivery_notes(db: Session = Depends(get_db)):
-    return crud.list_delivery_notes(db)
+def list_delivery_notes(response: Response, search: str | None = None,
+                        limit: int | None = Limit, offset: int = Offset,
+                        db: Session = Depends(get_db)):
+    return _with_total(response,
+                       crud.list_delivery_notes(db, search, limit, offset))
 
 
 @app.post("/api/delivery-notes", response_model=schemas.DeliveryNoteOut, status_code=201)
@@ -603,6 +688,55 @@ def convert_invoice(invoice_id: int, db: Session = Depends(get_db)):
     return crud.convert_invoice_to_delivery_note(db, invoice)
 
 
+# --------------------------- Anwesenheit (Live-Anzeige) ------------------
+# Kein WebSocket: die Clients fragen im Sekundentakt-Raster nach (Heartbeat
+# alle ~10 s, Timeout 45 s). Das reicht für "jemand anderes ist auch hier",
+# kommt ohne dauerhafte Verbindungen aus und funktioniert unverändert hinter
+# dem nginx-Proxy.
+def _check_doc_type(doc_type: str) -> str:
+    if doc_type not in models.PRESENCE_TYPES:
+        raise HTTPException(400, f"Unbekannte Belegart: {doc_type}")
+    return doc_type
+
+
+@app.post("/api/presence/{doc_type}/{doc_id}", response_model=schemas.PresenceOut)
+def heartbeat_presence(doc_type: str, doc_id: int, request: Request,
+                       db: Session = Depends(get_db)):
+    """Meldet den angemeldeten Benutzer auf diesem Beleg an und liefert
+    zurück, wer sonst gerade darauf ist."""
+    _check_doc_type(doc_type)
+    others = crud.touch_presence(db, doc_type, doc_id, auth.current_user(request))
+    return {"others": others}
+
+
+@app.delete("/api/presence/{doc_type}/{doc_id}", status_code=204)
+def clear_presence(doc_type: str, doc_id: int, request: Request,
+                   db: Session = Depends(get_db)):
+    """Wird beim Verlassen des Formulars aufgerufen. Bleibt der Aufruf aus
+    (Tab hart geschlossen), verfällt der Eintrag von selbst."""
+    _check_doc_type(doc_type)
+    crud.leave_presence(db, doc_type, doc_id, auth.current_user(request))
+    return Response(status_code=204)
+
+
+@app.get("/api/presence", response_model=list[schemas.PresenceDocOut])
+def list_presence(request: Request, db: Session = Depends(get_db)):
+    """Belege, auf denen gerade *andere* Benutzer sind – damit die Listen
+    zeigen können, wo jemand drin sitzt, bevor man selbst hineinklickt.
+
+    Der eigene Eintrag bleibt außen vor: „hier bist du gerade selbst" ist
+    keine Information, die eine Markierung wert wäre (gleiche Semantik wie
+    das `others` des Heartbeats)."""
+    me = auth.current_user(request)
+    grouped: dict[tuple[str, int], list] = {}
+    for row in crud.active_presence(db):
+        if row.username == me:
+            continue
+        grouped.setdefault((row.doc_type, row.doc_id), []).append(row)
+    return [{"doc_type": doc_type, "doc_id": doc_id, "users": users}
+            for (doc_type, doc_id), users in grouped.items()]
+
+
 # --------------------------- Dashboard / Statistik ----------------------
 @app.get("/api/stats")
 def stats(db: Session = Depends(get_db)):
@@ -651,8 +785,11 @@ def get_logo(db: Session = Depends(get_db)):
 
 # --------------------------- DSGVO-Audit-Log (nur Admin) ----------------
 @app.get("/api/audit-log", response_model=list[schemas.AuditLogOut])
-def get_audit_log(admin: models.User = Depends(require_admin), db: Session = Depends(get_db)):
-    return crud.list_audit_log(db)
+def get_audit_log(response: Response, limit: int = Query(200, ge=1),
+                  offset: int = Offset,
+                  admin: models.User = Depends(require_admin),
+                  db: Session = Depends(get_db)):
+    return _with_total(response, crud.list_audit_log(db, limit, offset))
 
 
 # --------------------------- Backup-Wiederherstellung (nur Admin) -------

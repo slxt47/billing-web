@@ -8,11 +8,15 @@
 #   - echter SMTP-Versand statt MailHog
 #   - echtes Let's-Encrypt-Zertifikat statt selbstsigniert (falls certbot
 #     verfügbar ist und eine öffentlich erreichbare Domain angegeben wird)
+#   - einen dedizierten Dienstbenutzer `rechnung`, dem die Anwendungsdateien
+#     gehören und unter dem der Container-Prozess läuft (statt root)
 #
 # Das Skript ist interaktiv, ändert nichts ohne Rückfrage und legt vor dem
 # Überschreiben immer eine Sicherung der bestehenden .env an.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=scripts/lib-common.sh
+. "$(dirname "$0")/lib-common.sh"
 
 echo "=== Rechnungs-App: Produktions-Einrichtung ==="
 echo
@@ -24,18 +28,6 @@ else
   cp .env.example .env
   echo ".env aus .env.example angelegt."
 fi
-
-_set_env() {
-  # _set_env KEY VALUE  – ersetzt/ergänzt KEY=... in .env
-  local key="$1" value="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i.tmp "s#^${key}=.*#${key}=${value}#" .env && rm -f .env.tmp
-  else
-    echo "${key}=${value}" >> .env
-  fi
-}
-
-rand() { openssl rand -hex "$1" 2>/dev/null || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
 # --- 1) Starke Geheimnisse ------------------------------------------------
 echo
@@ -56,6 +48,14 @@ _set_env ADMIN_USER "$ADMIN_USER"
 _set_env ADMIN_PASSWORD "$ADMIN_PASSWORD"
 echo "✓ Admin-Account: $ADMIN_USER / $ADMIN_PASSWORD"
 echo "  Bitte sicher notieren – wird nur beim allerersten Start in die DB übernommen."
+
+# --- 1b) Sicherheitseinstellungen für den Produktivbetrieb ---------------
+# Die App ist in Produktion nur über den HTTPS-Proxy erreichbar, daher darf
+# das Secure-Flag auf Sitzungs- und CSRF-Cookie gesetzt werden.
+_set_env SESSION_HTTPS_ONLY "true"
+_set_env CSRF_ENABLED "true"
+_set_env HSTS_ENABLED "true"
+echo "✓ Cookies auf 'secure', CSRF-Schutz und HSTS aktiviert."
 
 # --- 2) Echter SMTP-Versand ------------------------------------------------
 echo
@@ -104,6 +104,12 @@ if [ -n "$DOMAIN" ]; then
 else
   echo "– Übersprungen, selbstsigniertes Zertifikat bleibt aktiv."
 fi
+
+# --- 4) Dienstbenutzer statt root -----------------------------------------
+echo
+echo "-- Dienstbenutzer --"
+ensure_app_user || true
+own_app_files "$PWD" || true
 
 echo
 echo "=== Fertig ==="

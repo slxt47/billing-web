@@ -33,3 +33,36 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "false").lower() in ("1", "true", "yes"
 
 # Ordner der automatischen täglichen DB-Backups (siehe docker-compose.yml)
 BACKUP_DIR = os.getenv("BACKUP_DIR", "/backups")
+
+
+def _flag(name: str, default: str) -> bool:
+    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
+
+
+# --- Sitzung / CSRF -------------------------------------------------------
+# SESSION_HTTPS_ONLY setzt das Secure-Flag auf Sitzungs- und CSRF-Cookie.
+# Standard ist false, damit auch der direkte HTTP-Zugriff auf
+# http://localhost:8000 (docker-compose: WEB_PORT) funktioniert. Sobald die App
+# ausschließlich über den HTTPS-Proxy erreichbar ist – so richtet es
+# scripts/setup-prod.sh ein – gehört das auf true.
+SESSION_HTTPS_ONLY = _flag("SESSION_HTTPS_ONLY", "false")
+SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", str(12 * 3600)))  # 12 Stunden
+CSRF_ENABLED = _flag("CSRF_ENABLED", "true")
+
+# --- Rate-Limiting (0 = aus) ---------------------------------------------
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "600"))
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+RATE_LIMIT_LOGIN = int(os.getenv("RATE_LIMIT_LOGIN", "20"))
+RATE_LIMIT_LOGIN_WINDOW = int(os.getenv("RATE_LIMIT_LOGIN_WINDOW", "300"))
+
+# --- Sicherheits-Header ---------------------------------------------------
+HSTS_ENABLED = _flag("HSTS_ENABLED", "true")
+HSTS_MAX_AGE = int(os.getenv("HSTS_MAX_AGE", str(180 * 24 * 3600)))
+
+# --- Logging --------------------------------------------------------------
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# --- API-Paginierung ------------------------------------------------------
+# Obergrenze für ?limit=… bei Listen-Endpunkten. Ohne limit liefert die API
+# weiterhin alle Zeilen (das Frontend filtert/sortiert clientseitig).
+MAX_PAGE_SIZE = int(os.getenv("MAX_PAGE_SIZE", "500"))

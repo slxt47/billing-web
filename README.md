@@ -6,13 +6,20 @@ E-Mail-Versand und DSGVO-Funktionen.
 
 ## ⚠️ Project Status: Not Production Ready
 
-Please note that this web application is experimental and **not fully
-production-hardened**. There is a guided production setup script
-(`scripts/setup-prod.sh`, see below) that generates strong secrets and can wire
-up real SMTP and a Let's-Encrypt certificate, but there is no automated test
-suite, no CSRF protection, no security-header middleware and no rate limiting
-beyond login brute-force protection. Review the code before using this with
-real customer data.
+Please note that this web application is experimental and has **not been
+audited by a third party**. It ships with a guided production setup script
+(`scripts/setup-prod.sh`, see below) that generates strong secrets, creates a
+dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
+certificate. CSRF protection, per-IP rate limiting, security response headers
+(CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
+and an automated test suite (139 Backend- + 27 Frontend-Tests) with CI are
+in place.
+
+Still open before you point this at real customer data: no external
+penetration test, the login-lockout and rate-limit counters live in process
+memory (so a single `web` replica only), and MailHog/self-signed certificates
+remain the defaults until `scripts/setup-prod.sh` replaces them. Review the
+code and `TODO.md` first.
 
 🤖 **Development:** The code for this project was written and generated with the assistance of a **Mistral AI Agent**.
 
@@ -97,7 +104,30 @@ real customer data.
   der letzten 6 Monate; ist die Startseite nach dem Login.
 - **History-Filter** — nach Status/überfällig filtern, nach Nummer/Kunde suchen und Spalten sortieren.
 - **Hell-/Dunkel-Modus** — umschaltbar, Auswahl wird gespeichert.
-- **Sicherheit** — Login-Sperre nach zu vielen Fehlversuchen (Brute-Force-Schutz, 5 Min. Sperre nach 5 Fehlversuchen).
+- **Sicherheit** — Login-Sperre nach zu vielen Fehlversuchen (Brute-Force-Schutz,
+  5 Min. Sperre nach 5 Fehlversuchen), **CSRF-Schutz** für alle schreibenden
+  Requests, **Rate-Limit** je IP (Standard 600 Requests/Min., strenger für den
+  Login), **Sicherheits-Header** (CSP, HSTS, X-Frame-Options, Referrer-Policy …)
+  und ein Sitzungs-Cookie mit `SameSite=Strict` und 12 Stunden Laufzeit. Alles
+  über `.env` einstellbar (siehe `.env.example`).
+- **Dienstbenutzer statt root** — die Setup-Skripte legen den Host-Benutzer
+  `rechnung` an und übergeben Dateien an ihn; der `web`-Container läuft unter
+  derselben UID/GID (`APP_UID`/`APP_GID`), nicht als root.
+- **Logging** — jede Anfrage bekommt eine Request-ID; Logzeilen sind JSON und
+  jede Fehlermeldung enthält die ID, sodass ein Screenshot direkt zum Logeintrag
+  führt (`docker compose logs web`).
+- **Live-Anzeige „jemand ist auch hier"** — hat ein Kollege denselben Beleg
+  offen, steht das als Hinweis über dem Formular; in den Listen markiert ein
+  👀 die Belege, an denen gerade jemand sitzt. Ergänzt die Bearbeitungssperre
+  (die nur das gleichzeitige Speichern verhindert) und gilt auch für Angebote
+  und Lieferscheine, die gar keine Sperre haben.
+- **Entwurfs-Speicher** — begonnene Rechnungen, Angebote und Lieferscheine
+  überleben ein Neuladen der Seite: der Entwurf liegt lokal im Browser
+  (localStorage, 7 Tage) und wird beim Öffnen wieder eingesetzt. Es geht nichts
+  davon an den Server.
+- **Suchen & Filtern** — Such- und Filterfelder in allen Listen (Rechnungen,
+  Angebote, Lieferscheine, Kunden, Artikel, Benutzer, Audit-Log) und in der
+  Kundenauswahl beim Anlegen eines Belegs.
 - **HTTPS** — der Proxy bedient zusätzlich Port 443 (selbstsigniertes Zertifikat per Default,
   optional echtes Let's-Encrypt-Zertifikat über `scripts/setup-prod.sh`).
 - **Datenbank** — alles wird in PostgreSQL gespeichert.
@@ -114,7 +144,9 @@ real customer data.
 | E-Mail     | SMTP; standardmäßig an MailHog-Testserver, in Produktion konfigurierbar |
 | Proxy      | nginx (Reverse-Proxy nach Hostname, HTTP + HTTPS) |
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
-| Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`) |
+| Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
+| Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
+| Tests / CI | pytest (139 Backend-Tests) + jsdom (27 Frontend-Tests), GitHub Actions |
 
 ## Starten
 
@@ -191,7 +223,43 @@ Versand siehe `scripts/setup-prod.sh` bzw. `SMTP_*`/`MAIL_FROM` in `.env`.
 
 Konfiguration (Ports, DB-Zugangsdaten, Benutzer, SMTP) in der Datei `.env`.
 
+## Tests
+
+Die Testsuite läuft ohne Container gegen eine temporäre SQLite-Datenbank:
+
+```bash
+cd backend
+python -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Abgedeckt sind der Lebenszyklus von Rechnungen, Angeboten und Lieferscheinen,
+Kunden/Artikel, die Admin-Endpunkte samt Audit-Log sowie die Sicherheitsschicht
+selbst (CSRF, Rate-Limit, Header, Login-Sperre).
+
+Die Oberfläche hat eine eigene Testsuite: sie lädt die echte `index.html` samt
+`app.js` in ein jsdom-Fenster und prüft Kundenauswahl, Entwurfs-Speicher,
+Such-/Filterfelder und den CSRF-Header (Node ≥ 20 nötig):
+
+```bash
+cd backend/tests/frontend
+npm install
+npm test
+```
+
+Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
+über `.github/workflows/ci.yml`.
+
 ## API-Überblick
+
+> Alle Listen-Endpunkte akzeptieren optional `?limit=` (max. 500) und
+> `?offset=`; ohne `limit` kommt weiterhin die vollständige Liste. Die
+> Gesamtzahl steht immer im Header `X-Total-Count`.
+>
+> Schreibende Requests (`POST`/`PUT`/`PATCH`/`DELETE`) brauchen den Header
+> `X-CSRF-Token`. Den passenden Wert liefert `GET /api/me` bzw. das Cookie
+> `csrftoken`.
 
 ### Rechnungen
 | Methode | Pfad | Zweck |
@@ -255,6 +323,16 @@ Konfiguration (Ports, DB-Zugangsdaten, Benutzer, SMTP) in der Datei `.env`.
 | `DELETE`| `/api/products/{id}` | Artikel/Leistung löschen |
 | `GET`/`PUT` | `/api/settings` | Firmendaten lesen/speichern (Schreiben nur Admin) |
 | `POST`/`GET` | `/api/settings/logo` | Logo hochladen (nur Admin)/abrufen |
+
+### Live-Anzeige (wer hat gerade was offen)
+| Methode | Pfad | Zweck |
+|---------|------|-------|
+| `POST`  | `/api/presence/{typ}/{id}` | Lebenszeichen; liefert die *anderen* auf diesem Beleg |
+| `DELETE`| `/api/presence/{typ}/{id}` | Beleg verlassen (verfällt sonst nach 45 s von selbst) |
+| `GET`   | `/api/presence` | Alle Belege, auf denen gerade jemand anderes sitzt |
+
+`{typ}` ist `invoice`, `quote` oder `delivery_note`. Das Frontend meldet sich
+alle 10 Sekunden, solange ein Beleg im Formular offen ist.
 
 ### Benutzer, Audit-Log, Backups (nur Admin)
 | Methode | Pfad | Zweck |

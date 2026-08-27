@@ -1,17 +1,51 @@
 "use strict";
 
-// Bei abgelaufener/fehlender Anmeldung automatisch zur Login-Seite
+function cookie(name) {
+  const hit = document.cookie.split("; ").find((c) => c.startsWith(name + "="));
+  return hit ? decodeURIComponent(hit.slice(name.length + 1)) : "";
+}
+
+// Zentraler fetch-Wrapper:
+//  * hängt bei schreibenden Requests das CSRF-Token an (siehe app/security.py)
+//  * schickt bei abgelaufener/fehlender Anmeldung zur Login-Seite
 const _fetch = window.fetch.bind(window);
-window.fetch = async (...args) => {
-  const res = await _fetch(...args);
+const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
+let csrfReloaded = false;
+
+window.fetch = async (input, init) => {
+  const options = init ? { ...init } : {};
+  const method = (options.method || "GET").toUpperCase();
+  if (!SAFE_METHODS.includes(method)) {
+    const token = cookie("csrftoken");
+    if (token) {
+      const headers = new Headers(options.headers || {});
+      headers.set("X-CSRF-Token", token);
+      options.headers = headers;
+    }
+  }
+  const res = await _fetch(input, options);
   if (res.status === 401) {
     location.href = "/login";
     throw new Error("Nicht angemeldet");
+  }
+  if (res.status === 403 && !csrfReloaded) {
+    const body = await res.clone().json().catch(() => ({}));
+    if (String(body.detail || "").startsWith("CSRF")) {
+      // Token abgelaufen (z. B. Neustart des Servers): einmal neu laden reicht.
+      csrfReloaded = true;
+      location.reload();
+      throw new Error("CSRF-Token abgelaufen");
+    }
   }
   return res;
 };
 
 const $ = (sel) => document.querySelector(sel);
+// Alles, was aus der Datenbank kommt (Kundenname, Beschreibung, ...), muss vor
+// dem Einsetzen in innerHTML entschärft werden – sonst zerlegt schon ein
+// Anführungszeichen im Kundennamen die Tabelle.
+const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (ch) => ESC_MAP[ch]);
 const euro = (n) => Number(n).toLocaleString("de-DE", { style: "currency", currency: "EUR" });
 const todayISO = () => {
   const d = new Date();
@@ -37,6 +71,8 @@ let productsCache = [];
 let invoicesCache = [];
 let quotesCache = [];
 let deliveryCache = [];
+let usersCache = [];
+let auditCache = [];
 let currentIsAdmin = false;
 let sortKey = "id", sortDir = -1;
 let currentEditInvoiceId = null;
@@ -68,6 +104,8 @@ const views = {
 };
 function show(view) {
   if (view !== "new" && currentEditInvoiceId !== null) releaseInvoiceLock();
+  // Anwesenheit gilt immer nur für die Ansicht, in der der Beleg offen ist.
+  if (currentPresence && PRESENCE_VIEWS[currentPresence.type] !== view) stopPresence();
   for (const [name, el] of Object.entries(views)) el.hidden = name !== view;
   for (const n of Object.keys(views)) {
     const btn = $(`#nav-${n}`);
@@ -88,9 +126,16 @@ for (const n of Object.keys(views)) {
   const btn = $(`#nav-${n}`);
   if (btn) btn.onclick = () => show(n);
 }
-// "Neue Rechnung" beginnt immer mit einem leeren Formular (bricht eine
-// laufende Bearbeitung inkl. Sperre ab).
-$("#nav-new").onclick = () => { resetInvoiceForm(); show("new"); };
+// "Neue Rechnung" bricht eine laufende Bearbeitung ab (inkl. Sperre) und
+// beginnt mit einem leeren Formular. Ein noch nicht abgeschickter Entwurf für
+// eine NEUE Rechnung bleibt dagegen stehen – genau dafür ist er da; zum
+// Leeren gibt es "Entwurf verwerfen".
+$("#nav-new").onclick = () => {
+  if (currentEditInvoiceId !== null || $("#invoice-form").invoice_id.value) {
+    resetInvoiceForm();
+  }
+  show("new");
+};
 
 // ---------------------- Positionen (Rechnung) ----------------------
 const itemsBody = $("#items-body");
@@ -98,12 +143,17 @@ const itemsBody = $("#items-body");
 function addItemRow(desc = "", qty = 1, price = 0) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><input class="i-desc" type="text" list="product-list" placeholder="Leistung / Artikel" value="${desc}"></td>
-    <td><input class="i-qty col-num" type="number" min="0" step="0.01" value="${qty}"></td>
-    <td><input class="i-price col-num" type="number" min="0" step="0.01" value="${price}"></td>
+    <td><input class="i-desc" type="text" list="product-list" placeholder="Leistung / Artikel"></td>
+    <td><input class="i-qty col-num" type="number" min="0" step="0.01"></td>
+    <td><input class="i-price col-num" type="number" min="0" step="0.01"></td>
     <td class="i-sum col-num">0,00 €</td>
     <td><button type="button" class="remove-item" title="Entfernen">✕</button></td>`;
-  tr.querySelector(".remove-item").onclick = () => { tr.remove(); recalc(); };
+  tr.querySelector(".i-desc").value = desc;
+  tr.querySelector(".i-qty").value = qty;
+  tr.querySelector(".i-price").value = price;
+  tr.querySelector(".remove-item").onclick = () => {
+    tr.remove(); recalc(); saveDraftSoon("invoice");
+  };
   const descInput = tr.querySelector(".i-desc");
   descInput.addEventListener("input", () => {
     const p = productsCache.find((x) => x.name === descInput.value);
@@ -113,6 +163,7 @@ function addItemRow(desc = "", qty = 1, price = 0) {
   tr.querySelectorAll(".i-qty, .i-price").forEach((inp) => inp.addEventListener("input", recalc));
   itemsBody.appendChild(tr);
   recalc();
+  saveDraftSoon("invoice");
 }
 $("#add-item").onclick = () => addItemRow();
 
@@ -153,30 +204,95 @@ function recalc() {
   $(`#invoice-form [name=${n}]`).addEventListener("input", recalc));
 $("#invoice-form [name=small_business]").addEventListener("change", recalc);
 
-// ---------------------- Kunden-Auswahl im Formular ----------------------
-function fillCustomerDropdown() {
-  const sel = $("#customer-select");
-  sel.innerHTML = '<option value="">– neuen Kunden eingeben –</option>';
-  for (const c of customersCache.filter((x) => x.active)) {
+// -------- Kunden-Auswahl (Rechnung, Angebot, Lieferschein) ---------------
+// Jedes der drei Belegformulare hat dasselbe Bedienmuster: ein Suchfeld
+// filtert die Liste der gespeicherten Kunden, die Auswahl übernimmt die
+// Stammdaten ins Formular. Nur aktive Kunden werden angeboten.
+const customerPickers = [];
+
+function customerMatches(c, q) {
+  if (!q) return true;
+  return [c.name, c.contact_person, c.email, c.address]
+    .some((v) => String(v || "").toLowerCase().includes(q));
+}
+
+function fillPicker(p) {
+  const q = p.search.value.trim().toLowerCase();
+  const previous = p.select.value || p.pending || "";
+  p.select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  p.select.appendChild(placeholder);
+
+  let hits = 0;
+  for (const c of customersCache) {
+    if (!c.active || !customerMatches(c, q)) continue;
     const opt = document.createElement("option");
     opt.value = c.id;
-    opt.textContent = c.name;
-    sel.appendChild(opt);
+    opt.textContent = c.contact_person ? `${c.name} — ${c.contact_person}` : c.name;
+    p.select.appendChild(opt);
+    hits++;
   }
+  placeholder.textContent = q && !hits
+    ? "– kein Kunde passt zur Suche –"
+    : "– neuen Kunden eingeben –";
+  const stillThere = [...p.select.options].some((o) => o.value === previous);
+  p.select.value = stillThere ? previous : "";
+  if (stillThere) p.pending = "";
 }
-$("#customer-select").addEventListener("change", (e) => {
-  const c = customersCache.find((x) => String(x.id) === e.target.value);
+
+/** Auswahl vormerken, solange die Kundenliste noch nicht geladen ist. */
+function setPendingCustomer(selectSel, id) {
+  const picker = customerPickers.find((p) => p.select === $(selectSel));
+  if (!picker) return;
+  picker.pending = id ? String(id) : "";
+  fillPicker(picker);
+}
+
+function registerCustomerPicker(selectSel, searchSel, apply) {
+  const select = $(selectSel), search = $(searchSel);
+  if (!select || !search) return;
+  const picker = { select, search, apply, pending: "" };
+  customerPickers.push(picker);
+  search.addEventListener("input", () => fillPicker(picker));
+  select.addEventListener("change", () => {
+    const c = customersCache.find((x) => String(x.id) === select.value);
+    if (c) apply(c);
+  });
+}
+
+function fillCustomerDropdown() {
+  customerPickers.forEach(fillPicker);
+}
+
+registerCustomerPicker("#customer-select", "#customer-search", (c) => {
   const f = $("#invoice-form");
-  if (c) {
-    f.customer_name.value = c.name;
-    f.customer_address.value = c.address || "";
-    f.customer_contact_person.value = c.contact_person || "";
-    f.due_date.value = addDays(c.payment_term_days);
-    f.skonto_percent.value = c.skonto_percent || 0;
-    f.skonto_days.value = c.skonto_days || 0;
-    $("#save-customer").checked = false;
-    recalc();
-  }
+  f.customer_name.value = c.name;
+  f.customer_address.value = c.address || "";
+  f.customer_contact_person.value = c.contact_person || "";
+  f.due_date.value = addDays(c.payment_term_days);
+  f.skonto_percent.value = c.skonto_percent || 0;
+  f.skonto_days.value = c.skonto_days || 0;
+  $("#save-customer").checked = false;
+  recalc();
+  saveDraftSoon("invoice");
+});
+
+registerCustomerPicker("#quote-customer-select", "#quote-customer-search", (c) => {
+  const f = $("#quote-form");
+  f.customer_name.value = c.name;
+  f.customer_address.value = c.address || "";
+  f.customer_contact_person.value = c.contact_person || "";
+  recalcQuote();
+  saveDraftSoon("quote");
+});
+
+registerCustomerPicker("#delivery-customer-select", "#delivery-customer-search", (c) => {
+  const f = $("#delivery-form");
+  f.customer_name.value = c.name;
+  f.customer_address.value = c.address || "";
+  f.customer_contact_person.value = c.contact_person || "";
+  saveDraftSoon("delivery");
 });
 
 function fillProductDatalist() {
@@ -199,6 +315,100 @@ function emailForCustomer(name) {
   return c && c.email ? c.email : "";
 }
 
+// ---------------------- Live-Anzeige: wer ist noch hier? ------------------
+// Ergänzung zur Bearbeitungssperre: die verhindert zwar, dass zwei Leute
+// dieselbe Rechnung gleichzeitig speichern, sagt einem aber während des
+// Tippens nichts. Der Heartbeat meldet den eigenen Beleg alle 10 s an den
+// Server und bekommt zurück, wer sonst noch darauf ist. Angebote und
+// Lieferscheine haben gar keine Sperre – dort ist der Hinweis noch wichtiger.
+const PRESENCE_INTERVAL = 10000;
+const PRESENCE_VIEWS = { invoice: "new", quote: "quotes", delivery_note: "delivery" };
+const PRESENCE_BANNERS = {
+  invoice: "#invoice-presence",
+  quote: "#quote-presence",
+  delivery_note: "#delivery-presence",
+};
+const DOC_LABEL = {
+  invoice: "diese Rechnung",
+  quote: "dieses Angebot",
+  delivery_note: "diesen Lieferschein",
+};
+
+let currentPresence = null;      // { type, id } – höchstens ein Beleg gleichzeitig
+let presenceTimer = null;
+let presenceMap = {};            // "typ:id" -> [{username, …}] für die Listen
+
+function presenceBanner(type) {
+  return $(PRESENCE_BANNERS[type]);
+}
+
+function renderPresenceBanner(type, others) {
+  const banner = presenceBanner(type);
+  if (!banner) return;
+  if (!others || !others.length) {
+    banner.hidden = true;
+    banner.textContent = "";
+    return;
+  }
+  const names = others.map((o) => o.username).join(", ");
+  banner.textContent = others.length === 1
+    ? `👀 ${names} hat ${DOC_LABEL[type]} gerade ebenfalls geöffnet.`
+    : `👀 ${names} haben ${DOC_LABEL[type]} gerade ebenfalls geöffnet.`;
+  banner.hidden = false;
+}
+
+async function sendPresenceHeartbeat() {
+  if (!currentPresence) return;
+  const { type, id } = currentPresence;
+  try {
+    const res = await fetch(`/api/presence/${type}/${id}`, { method: "POST" });
+    if (!res.ok) return;
+    const data = await res.json();
+    // Zwischenzeitlich weitergeklickt? Dann gehört die Antwort nicht mehr hierher.
+    if (currentPresence && currentPresence.type === type && currentPresence.id === id) {
+      renderPresenceBanner(type, data.others);
+    }
+  } catch (_) { /* Netzaussetzer: der nächste Heartbeat versucht es erneut */ }
+}
+
+function startPresence(type, id) {
+  stopPresence();
+  currentPresence = { type, id: String(id) };
+  sendPresenceHeartbeat();
+  presenceTimer = setInterval(sendPresenceHeartbeat, PRESENCE_INTERVAL);
+}
+
+function stopPresence() {
+  if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; }
+  if (!currentPresence) return;
+  const { type, id } = currentPresence;
+  currentPresence = null;
+  renderPresenceBanner(type, []);
+  // Abmelden ist nur Kosmetik – ohne Lebenszeichen verfällt der Eintrag
+  // ohnehin nach 45 s (z. B. wenn der Tab einfach geschlossen wird).
+  fetch(`/api/presence/${type}/${id}`, { method: "DELETE" }).catch(() => {});
+}
+
+/** Anwesende für die Listenansichten laden (ein Request je Listenaufbau). */
+async function refreshPresenceMap() {
+  try {
+    const rows = await (await fetch("/api/presence")).json();
+    presenceMap = {};
+    for (const row of rows) presenceMap[`${row.doc_type}:${row.doc_id}`] = row.users;
+  } catch (_) { presenceMap = {}; }
+}
+
+/** Kleiner Marker für eine Tabellenzeile – leer, wenn dort niemand ist. */
+function presenceMarker(type, id) {
+  const users = presenceMap[`${type}:${id}`];
+  if (!users || !users.length) return "";
+  const names = users.map((u) => u.username).join(", ");
+  const title = users.length === 1
+    ? `${names} hat diesen Beleg gerade geöffnet`
+    : `${names} haben diesen Beleg gerade geöffnet`;
+  return ` <span class="presence-dot" title="${esc(title)}">👀</span>`;
+}
+
 // ---------------------- Rechnung: Bearbeitungssperre ----------------------
 function startLockHeartbeat(id) {
   stopLockHeartbeat();
@@ -212,6 +422,7 @@ function stopLockHeartbeat() {
 }
 function releaseInvoiceLock() {
   stopLockHeartbeat();
+  stopPresence();
   if (currentEditInvoiceId !== null) {
     const id = currentEditInvoiceId;
     currentEditInvoiceId = null;
@@ -237,6 +448,8 @@ function resetInvoiceForm() {
   $("#auto-email-row").hidden = false;
   $("#lock-banner").hidden = true;
   $("#form-msg").textContent = "";
+  clearDraft("invoice");
+  setPendingCustomer("#customer-select", "");
 }
 $("#invoice-cancel-edit").addEventListener("click", resetInvoiceForm);
 
@@ -250,6 +463,7 @@ async function openInvoiceForEdit(id) {
   const inv = await (await fetch(`/api/invoices/${id}`)).json();
   currentEditInvoiceId = id;
 
+  clearDraft("invoice");
   const f = $("#invoice-form");
   f.invoice_id.value = id;
   f.customer_name.value = inv.customer_name;
@@ -276,6 +490,7 @@ async function openInvoiceForEdit(id) {
   $("#form-msg").textContent = "";
   startLockHeartbeat(id);
   show("new");
+  startPresence("invoice", id);
 }
 
 // ---------------------- Rechnung speichern (neu/bearbeiten) ----------------------
@@ -347,7 +562,11 @@ $("#invoice-form").addEventListener("submit", async (e) => {
 async function loadHistory() {
   const q = $("#search").value.trim();
   const url = "/api/invoices" + (q ? `?search=${encodeURIComponent(q)}` : "");
-  invoicesCache = await (await fetch(url)).json();
+  const [rows] = await Promise.all([
+    fetch(url).then((r) => r.json()),
+    refreshPresenceMap(),
+  ]);
+  invoicesCache = rows;
   renderHistory();
 }
 
@@ -372,8 +591,8 @@ function renderHistory() {
     const badge = inv.is_overdue ? "ueberfaellig" : inv.status;
     const label = inv.is_overdue ? "überfällig" : inv.status;
     tr.innerHTML = `
-      <td>${inv.number}</td>
-      <td>${inv.customer_name}</td>
+      <td>${esc(inv.number)}${presenceMarker("invoice", inv.id)}</td>
+      <td>${esc(inv.customer_name)}</td>
       <td>${fmtDate(inv.issue_date)}</td>
       <td class="col-num">${euro(inv.total)}</td>
       <td class="col-num">${inv.remaining > 0 ? euro(inv.remaining) : "–"}</td>
@@ -481,13 +700,31 @@ async function loadDashboard() {
   ].map(([label, val, cls]) =>
     `<div class="kpi ${cls}"><div class="kpi-val">${val}</div><div class="kpi-label">${label}</div></div>`).join("");
 
+  // Balken werden per DOM gebaut statt über ein style-Attribut: die CSP
+  // erlaubt keine Inline-Styles (style-src 'self').
   const max = Math.max(1, ...s.months.map((m) => m.revenue));
-  $("#chart").innerHTML = s.months.map((m) =>
-    `<div class="bar-col" title="${euro(m.revenue)}">
-       <div class="bar" style="height:${Math.round(m.revenue / max * 100)}%"></div>
-       <div class="bar-val">${m.revenue ? Math.round(m.revenue) : ""}</div>
-       <div class="bar-label">${m.label}</div>
-     </div>`).join("");
+  const chart = $("#chart");
+  chart.innerHTML = "";
+  for (const m of s.months) {
+    const col = document.createElement("div");
+    col.className = "bar-col";
+    col.title = euro(m.revenue);
+
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.height = `${Math.round(m.revenue / max * 100)}%`;
+
+    const val = document.createElement("div");
+    val.className = "bar-val";
+    val.textContent = m.revenue ? Math.round(m.revenue) : "";
+
+    const label = document.createElement("div");
+    label.className = "bar-label";
+    label.textContent = m.label;
+
+    col.append(bar, val, label);
+    chart.appendChild(col);
+  }
 }
 
 // ---------------------- Kunden-Verwaltung ----------------------
@@ -498,19 +735,30 @@ async function refreshCustomers() {
 
 async function loadCustomers() {
   await refreshCustomers();
+  renderCustomers();
+}
+
+function renderCustomers() {
+  const q0 = $("#customer-list-search").value.trim().toLowerCase();
+  const activeFilter = $("#customer-filter-active").value;
+  const rows = customersCache.filter((c) =>
+    (activeFilter === "" || String(c.active ? 1 : 0) === activeFilter) &&
+    (!q0 || customerMatches(c, q0)));
+
   const body = $("#customers-body");
   body.innerHTML = "";
   $("#customers-empty").hidden = customersCache.length > 0;
-  for (const c of customersCache) {
+  $("#customers-nomatch").hidden = customersCache.length === 0 || rows.length > 0;
+  for (const c of rows) {
     const tr = document.createElement("tr");
     if (!c.active) tr.classList.add("inactive-row");
     const skonto = c.skonto_percent > 0 && c.skonto_days > 0
       ? `${c.skonto_percent}% / ${c.skonto_days} Tage` : "–";
     tr.innerHTML = `
-      <td>${c.name}</td>
-      <td>${c.email || "–"}</td>
-      <td>${c.contact_person || "–"}</td>
-      <td>${(c.address || "").replace(/\n/g, ", ")}</td>
+      <td>${esc(c.name)}</td>
+      <td>${esc(c.email) || "–"}</td>
+      <td>${esc(c.contact_person) || "–"}</td>
+      <td>${esc((c.address || "").replace(/\n/g, ", "))}</td>
       <td>${c.payment_term_days} Tage</td>
       <td>${skonto}</td>
       <td><span class="badge ${c.active ? "bezahlt" : "inactive"}">${c.active ? "aktiv" : "inaktiv"}</span></td>
@@ -614,14 +862,25 @@ async function refreshProducts() {
 
 async function loadProducts() {
   await refreshProducts();
+  renderProducts();
+}
+
+function renderProducts() {
+  const q0 = $("#product-list-search").value.trim().toLowerCase();
+  const activeFilter = $("#product-filter-active").value;
+  const rows = productsCache.filter((p) =>
+    (activeFilter === "" || String(p.active ? 1 : 0) === activeFilter) &&
+    (!q0 || String(p.name || "").toLowerCase().includes(q0)));
+
   const body = $("#products-body");
   body.innerHTML = "";
   $("#products-empty").hidden = productsCache.length > 0;
-  for (const p of productsCache) {
+  $("#products-nomatch").hidden = productsCache.length === 0 || rows.length > 0;
+  for (const p of rows) {
     const tr = document.createElement("tr");
     if (!p.active) tr.classList.add("inactive-row");
     tr.innerHTML = `
-      <td>${p.name}</td>
+      <td>${esc(p.name)}</td>
       <td class="col-num">${euro(p.unit_price)}</td>
       <td><span class="badge ${p.active ? "bezahlt" : "inactive"}">${p.active ? "aktiv" : "inaktiv"}</span></td>
       <td class="actions">
@@ -694,12 +953,17 @@ const quoteItemsBody = $("#quote-items-body");
 function addQuoteItemRow(desc = "", qty = 1, price = 0) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><input class="qi-desc" type="text" list="quote-product-list" placeholder="Leistung / Artikel" value="${desc}"></td>
-    <td><input class="qi-qty col-num" type="number" min="0" step="0.01" value="${qty}"></td>
-    <td><input class="qi-price col-num" type="number" min="0" step="0.01" value="${price}"></td>
+    <td><input class="qi-desc" type="text" list="quote-product-list" placeholder="Leistung / Artikel"></td>
+    <td><input class="qi-qty col-num" type="number" min="0" step="0.01"></td>
+    <td><input class="qi-price col-num" type="number" min="0" step="0.01"></td>
     <td class="qi-sum col-num">0,00 €</td>
     <td><button type="button" class="remove-item" title="Entfernen">✕</button></td>`;
-  tr.querySelector(".remove-item").onclick = () => { tr.remove(); recalcQuote(); };
+  tr.querySelector(".qi-desc").value = desc;
+  tr.querySelector(".qi-qty").value = qty;
+  tr.querySelector(".qi-price").value = price;
+  tr.querySelector(".remove-item").onclick = () => {
+    tr.remove(); recalcQuote(); saveDraftSoon("quote");
+  };
   const descInput = tr.querySelector(".qi-desc");
   descInput.addEventListener("input", () => {
     const p = productsCache.find((x) => x.name === descInput.value);
@@ -709,6 +973,7 @@ function addQuoteItemRow(desc = "", qty = 1, price = 0) {
   tr.querySelectorAll(".qi-qty, .qi-price").forEach((inp) => inp.addEventListener("input", recalcQuote));
   quoteItemsBody.appendChild(tr);
   recalcQuote();
+  saveDraftSoon("quote");
 }
 $("#quote-add-item").onclick = () => addQuoteItemRow();
 
@@ -744,6 +1009,8 @@ $("#quote-form [name=small_business]").addEventListener("change", recalcQuote);
 
 function startQuoteEdit(q) {
   const f = $("#quote-form");
+  clearDraft("quote");
+  startPresence("quote", q.id);
   f.quote_id.value = q.id;
   f.customer_name.value = q.customer_name;
   f.customer_address.value = q.customer_address || "";
@@ -769,10 +1036,13 @@ function resetQuoteForm() {
   quoteItemsBody.innerHTML = "";
   addQuoteItemRow();
   recalcQuote();
+  stopPresence();
   $("#quote-form-title").textContent = "Neues Angebot erstellen";
   $("#quote-submit").textContent = "Angebot speichern";
   $("#quote-cancel-edit").hidden = true;
   $("#quote-msg").textContent = "";
+  clearDraft("quote");
+  setPendingCustomer("#quote-customer-select", "");
 }
 $("#quote-cancel-edit").addEventListener("click", resetQuoteForm);
 
@@ -827,18 +1097,33 @@ $("#quote-form").addEventListener("submit", async (e) => {
 const QUOTE_BADGE_CLASS = { offen: "offen", angenommen: "bezahlt", abgelehnt: "storniert", umgewandelt: "bezahlt" };
 
 async function loadQuotes() {
-  quotesCache = await (await fetch("/api/quotes")).json();
+  const [rows] = await Promise.all([
+    fetch("/api/quotes").then((r) => r.json()),
+    refreshPresenceMap(),
+  ]);
+  quotesCache = rows;
+  renderQuotes();
+}
+
+function renderQuotes() {
+  const q0 = $("#quote-search").value.trim().toLowerCase();
+  const status = $("#quote-filter-status").value;
+  const rows = quotesCache.filter((q) =>
+    (!status || q.status === status) &&
+    (!q0 || `${q.number} ${q.customer_name}`.toLowerCase().includes(q0)));
+
   const body = $("#quotes-body");
   body.innerHTML = "";
   $("#quotes-empty").hidden = quotesCache.length > 0;
-  for (const q of quotesCache) {
+  $("#quotes-nomatch").hidden = quotesCache.length === 0 || rows.length > 0;
+  for (const q of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${q.number}</td>
-      <td>${q.customer_name}</td>
+      <td>${esc(q.number)}${presenceMarker("quote", q.id)}</td>
+      <td>${esc(q.customer_name)}</td>
       <td>${fmtDate(q.issue_date)}</td>
       <td class="col-num">${euro(q.total)}</td>
-      <td><span class="badge ${QUOTE_BADGE_CLASS[q.status] || "offen"}">${q.status}</span></td>
+      <td><span class="badge ${QUOTE_BADGE_CLASS[q.status] || "offen"}">${esc(q.status)}</span></td>
       <td class="actions">
         <a class="link" href="/api/quotes/${q.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
@@ -897,16 +1182,23 @@ const deliveryItemsBody = $("#delivery-items-body");
 function addDeliveryItemRow(desc = "", qty = 1) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
-    <td><input class="di-desc" type="text" list="delivery-product-list" placeholder="Leistung / Artikel" value="${desc}"></td>
-    <td><input class="di-qty col-num" type="number" min="0" step="0.01" value="${qty}"></td>
+    <td><input class="di-desc" type="text" list="delivery-product-list" placeholder="Leistung / Artikel"></td>
+    <td><input class="di-qty col-num" type="number" min="0" step="0.01"></td>
     <td><button type="button" class="remove-item" title="Entfernen">✕</button></td>`;
-  tr.querySelector(".remove-item").onclick = () => tr.remove();
+  tr.querySelector(".di-desc").value = desc;
+  tr.querySelector(".di-qty").value = qty;
+  tr.querySelector(".remove-item").onclick = () => {
+    tr.remove(); saveDraftSoon("delivery");
+  };
   deliveryItemsBody.appendChild(tr);
+  saveDraftSoon("delivery");
 }
 $("#delivery-add-item").onclick = () => addDeliveryItemRow();
 
 function startDeliveryEdit(d) {
   const f = $("#delivery-form");
+  clearDraft("delivery");
+  startPresence("delivery_note", d.id);
   f.delivery_id.value = d.id;
   f.customer_name.value = d.customer_name;
   f.customer_address.value = d.customer_address || "";
@@ -926,10 +1218,13 @@ function resetDeliveryForm() {
   f.delivery_id.value = "";
   deliveryItemsBody.innerHTML = "";
   addDeliveryItemRow();
+  stopPresence();
   $("#delivery-form-title").textContent = "Neuen Lieferschein erstellen";
   $("#delivery-submit").textContent = "Lieferschein speichern";
   $("#delivery-cancel-edit").hidden = true;
   $("#delivery-msg").textContent = "";
+  clearDraft("delivery");
+  setPendingCustomer("#delivery-customer-select", "");
 }
 $("#delivery-cancel-edit").addEventListener("click", resetDeliveryForm);
 
@@ -977,17 +1272,32 @@ $("#delivery-form").addEventListener("submit", async (e) => {
 });
 
 async function loadDeliveryNotes() {
-  deliveryCache = await (await fetch("/api/delivery-notes")).json();
+  const [rows] = await Promise.all([
+    fetch("/api/delivery-notes").then((r) => r.json()),
+    refreshPresenceMap(),
+  ]);
+  deliveryCache = rows;
+  renderDeliveryNotes();
+}
+
+function renderDeliveryNotes() {
+  const q0 = $("#delivery-search").value.trim().toLowerCase();
+  const status = $("#delivery-filter-status").value;
+  const rows = deliveryCache.filter((d) =>
+    (!status || d.status === status) &&
+    (!q0 || `${d.number} ${d.customer_name}`.toLowerCase().includes(q0)));
+
   const body = $("#delivery-body");
   body.innerHTML = "";
   $("#delivery-empty").hidden = deliveryCache.length > 0;
-  for (const d of deliveryCache) {
+  $("#delivery-nomatch").hidden = deliveryCache.length === 0 || rows.length > 0;
+  for (const d of rows) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${d.number}</td>
-      <td>${d.customer_name}</td>
+      <td>${esc(d.number)}${presenceMarker("delivery_note", d.id)}</td>
+      <td>${esc(d.customer_name)}</td>
       <td>${fmtDate(d.issue_date)}</td>
-      <td><span class="badge ${d.status === "storniert" ? "storniert" : "offen"}">${d.status}</span></td>
+      <td><span class="badge ${d.status === "storniert" ? "storniert" : "offen"}">${esc(d.status)}</span></td>
       <td class="actions">
         <a class="link" href="/api/delivery-notes/${d.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
@@ -1077,17 +1387,23 @@ $("#logo-input").addEventListener("change", async (e) => {
 
 // ---------------------- Benutzerverwaltung (Admin) ----------------------
 async function loadUsers() {
-  const users = await (await fetch("/api/users")).json();
+  usersCache = await (await fetch("/api/users")).json();
+  renderUsers();
+}
+
+function renderUsers() {
+  const q0 = $("#user-search").value.trim().toLowerCase();
+  const users = usersCache.filter((u) => !q0 || u.username.toLowerCase().includes(q0));
   const body = $("#users-body");
   body.innerHTML = "";
   for (const u of users) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${u.username}</td>
+      <td>${esc(u.username)}</td>
       <td>${u.is_admin ? "👑 Admin" : "Benutzer"}</td>
       <td class="actions">
         <button class="link" data-act="pw" data-id="${u.id}" title="Passwort ändern">🔑 <span>Passwort</span></button>
-        <button class="danger" data-act="del" data-id="${u.id}" data-name="${u.username}" title="Benutzer löschen">🗑️ <span>löschen</span></button>
+        <button class="danger" data-act="del" data-id="${u.id}" data-name="${esc(u.username)}" title="Benutzer löschen">🗑️ <span>löschen</span></button>
       </td>`;
     body.appendChild(tr);
   }
@@ -1135,17 +1451,45 @@ $("#user-form").addEventListener("submit", async (e) => {
 
 // ---------------------- Audit-Log (Admin, DSGVO) ----------------------
 async function loadAuditLog() {
-  const rows = await (await fetch("/api/audit-log")).json();
+  auditCache = await (await fetch("/api/audit-log")).json();
+  renderAuditLog();
+}
+
+function renderAuditLog() {
+  const q0 = $("#audit-search").value.trim().toLowerCase();
+  const rows = auditCache.filter((r) => !q0 ||
+    `${r.username} ${r.action} ${r.target_type} ${r.target_id || ""} ${r.detail || ""}`
+      .toLowerCase().includes(q0));
   const body = $("#audit-body");
   body.innerHTML = rows.map((r) => `
     <tr>
       <td>${new Date(r.timestamp).toLocaleString("de-DE")}</td>
-      <td>${r.username}</td>
-      <td>${r.action}</td>
-      <td>${r.target_type}${r.target_id ? " #" + r.target_id : ""}</td>
-      <td>${r.detail || "–"}</td>
+      <td>${esc(r.username)}</td>
+      <td>${esc(r.action)}</td>
+      <td>${esc(r.target_type)}${r.target_id ? " #" + r.target_id : ""}</td>
+      <td>${esc(r.detail) || "–"}</td>
     </tr>`).join("");
 }
+
+// ---------------------- Such-/Filterfelder der Listen --------------------
+// Alle Listen filtern rein clientseitig über den bereits geladenen Cache –
+// kein zusätzlicher Request je Tastendruck. Ausnahme ist die History, die
+// serverseitig sucht (dort können es viele Rechnungen werden).
+[
+  ["#quote-search", "input", renderQuotes],
+  ["#quote-filter-status", "change", renderQuotes],
+  ["#delivery-search", "input", renderDeliveryNotes],
+  ["#delivery-filter-status", "change", renderDeliveryNotes],
+  ["#customer-list-search", "input", renderCustomers],
+  ["#customer-filter-active", "change", renderCustomers],
+  ["#product-list-search", "input", renderProducts],
+  ["#product-filter-active", "change", renderProducts],
+  ["#user-search", "input", renderUsers],
+  ["#audit-search", "input", renderAuditLog],
+].forEach(([sel, event, handler]) => {
+  const el = $(sel);
+  if (el) el.addEventListener(event, handler);
+});
 
 // ---------------------- Backup & Wiederherstellung (Admin) ----------------------
 async function loadBackups() {
@@ -1156,7 +1500,7 @@ async function loadBackups() {
   for (const b of files) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${b.name}</td>
+      <td>${esc(b.name)}</td>
       <td>${new Date(b.modified).toLocaleString("de-DE")}</td>
       <td class="col-num">${(b.size / 1024).toFixed(0)} KB</td>
       <td class="actions">
@@ -1181,6 +1525,246 @@ async function restoreBackup(name) {
   location.reload();
 }
 
+// ---------------------- Zwischenspeicher für Eingaben --------------------
+// Nicht abgeschickte Formulareingaben überstehen ein Neuladen der Seite
+// (F5, versehentlich geschlossener Tab, abgelaufene Sitzung) und werden beim
+// nächsten Öffnen automatisch wiederhergestellt. Die Entwürfe liegen nur im
+// Browser (localStorage), es geht nichts davon an den Server.
+// Beim Bearbeiten eines bestehenden Belegs wird bewusst KEIN Entwurf
+// angelegt: dort ist der Serverstand maßgeblich und es hängt eine
+// Bearbeitungssperre daran.
+const DRAFT_KEY = "rechnung.drafts.v1";
+const DRAFT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
+function readDrafts() {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY)) || {}; }
+  catch (_) { return {}; }
+}
+function writeDrafts(all) {
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(all)); } catch (_) { /* Speicher voll/blockiert */ }
+}
+
+function draftHasContent(d) {
+  if (!d) return false;
+  const f = d.fields || {};
+  const texts = [f.customer_name, f.customer_address, f.customer_contact_person, f.notes];
+  return texts.some((v) => String(v || "").trim() !== "") ||
+    (d.items || []).some((it) => String(it.description || "").trim() !== "");
+}
+
+function storeDraft(name, data) {
+  const all = readDrafts();
+  if (draftHasContent(data)) all[name] = { saved_at: Date.now(), data };
+  else delete all[name];
+  writeDrafts(all);
+  updateDraftHints();
+}
+
+function clearDraft(name) {
+  const all = readDrafts();
+  delete all[name];
+  writeDrafts(all);
+  const banner = $(`#${name}-draft-banner`);
+  if (banner) banner.hidden = true;
+  updateDraftHints();
+}
+
+// Kleiner Punkt am Reiter, solange dort ein ungespeicherter Entwurf liegt –
+// sonst fiele er nach einem Neuladen (Startseite ist das Dashboard) niemandem auf.
+const DRAFT_NAV = { invoice: "#nav-new", quote: "#nav-quotes", delivery: "#nav-delivery" };
+function updateDraftHints() {
+  const all = readDrafts();
+  for (const [name, sel] of Object.entries(DRAFT_NAV)) {
+    const btn = $(sel);
+    if (btn) btn.classList.toggle("has-draft", Boolean(all[name]));
+  }
+}
+
+const draftTimers = {};
+function saveDraftSoon(name) {
+  clearTimeout(draftTimers[name]);
+  draftTimers[name] = setTimeout(() => saveDraftNow(name), 400);
+}
+function saveDraftNow(name) {
+  clearTimeout(draftTimers[name]);
+  storeDraft(name, DRAFTS[name].collect());
+}
+
+function showDraftBanner(name, savedAt) {
+  const banner = $(`#${name}-draft-banner`);
+  if (!banner) return;
+  banner.querySelector(".draft-text").textContent =
+    `🗂️ Wiederhergestellt: nicht gespeicherte Eingaben vom ${new Date(savedAt).toLocaleString("de-DE")}.`;
+  banner.hidden = false;
+}
+
+// --- Rechnung ---
+function collectInvoiceDraft() {
+  const f = $("#invoice-form");
+  if (f.invoice_id.value) return null;   // Bearbeitungsmodus: kein Entwurf
+  return {
+    fields: {
+      customer_id: $("#customer-select").value,
+      customer_name: f.customer_name.value,
+      customer_address: f.customer_address.value,
+      customer_contact_person: f.customer_contact_person.value,
+      due_date: f.due_date.value,
+      tax_rate: f.tax_rate.value,
+      notes: f.notes.value,
+      skonto_percent: f.skonto_percent.value,
+      skonto_days: f.skonto_days.value,
+      discount_percent: f.discount_percent.value,
+      small_business: f.small_business.checked,
+      save_customer: $("#save-customer").checked,
+      auto_email: $("#auto-email").checked,
+    },
+    items: [...itemsBody.querySelectorAll("tr")].map((tr) => ({
+      description: tr.querySelector(".i-desc").value,
+      quantity: tr.querySelector(".i-qty").value,
+      unit_price: tr.querySelector(".i-price").value,
+    })),
+  };
+}
+
+function applyInvoiceDraft(d) {
+  const f = $("#invoice-form");
+  const x = d.fields || {};
+  f.customer_name.value = x.customer_name || "";
+  f.customer_address.value = x.customer_address || "";
+  f.customer_contact_person.value = x.customer_contact_person || "";
+  f.due_date.value = x.due_date || "";
+  f.tax_rate.value = x.tax_rate ?? 20;
+  f.notes.value = x.notes || "";
+  f.skonto_percent.value = x.skonto_percent ?? 0;
+  f.skonto_days.value = x.skonto_days ?? 0;
+  f.discount_percent.value = x.discount_percent ?? 0;
+  f.small_business.checked = !!x.small_business;
+  $("#save-customer").checked = !!x.save_customer;
+  $("#auto-email").checked = !!x.auto_email;
+  itemsBody.innerHTML = "";
+  for (const it of (d.items || [])) addItemRow(it.description, it.quantity, it.unit_price);
+  if (!itemsBody.children.length) addItemRow();
+  recalc();
+  setPendingCustomer("#customer-select", x.customer_id);
+}
+
+// --- Angebot ---
+function collectQuoteDraft() {
+  const f = $("#quote-form");
+  if (f.quote_id.value) return null;
+  return {
+    fields: {
+      customer_id: $("#quote-customer-select").value,
+      customer_name: f.customer_name.value,
+      customer_address: f.customer_address.value,
+      customer_contact_person: f.customer_contact_person.value,
+      valid_until: f.valid_until.value,
+      tax_rate: f.tax_rate.value,
+      notes: f.notes.value,
+      discount_percent: f.discount_percent.value,
+      small_business: f.small_business.checked,
+    },
+    items: [...quoteItemsBody.querySelectorAll("tr")].map((tr) => ({
+      description: tr.querySelector(".qi-desc").value,
+      quantity: tr.querySelector(".qi-qty").value,
+      unit_price: tr.querySelector(".qi-price").value,
+    })),
+  };
+}
+
+function applyQuoteDraft(d) {
+  const f = $("#quote-form");
+  const x = d.fields || {};
+  f.customer_name.value = x.customer_name || "";
+  f.customer_address.value = x.customer_address || "";
+  f.customer_contact_person.value = x.customer_contact_person || "";
+  f.valid_until.value = x.valid_until || "";
+  f.tax_rate.value = x.tax_rate ?? 20;
+  f.notes.value = x.notes || "";
+  f.discount_percent.value = x.discount_percent ?? 0;
+  f.small_business.checked = !!x.small_business;
+  quoteItemsBody.innerHTML = "";
+  for (const it of (d.items || [])) addQuoteItemRow(it.description, it.quantity, it.unit_price);
+  if (!quoteItemsBody.children.length) addQuoteItemRow();
+  recalcQuote();
+  setPendingCustomer("#quote-customer-select", x.customer_id);
+}
+
+// --- Lieferschein ---
+function collectDeliveryDraft() {
+  const f = $("#delivery-form");
+  if (f.delivery_id.value) return null;
+  return {
+    fields: {
+      customer_id: $("#delivery-customer-select").value,
+      customer_name: f.customer_name.value,
+      customer_address: f.customer_address.value,
+      customer_contact_person: f.customer_contact_person.value,
+      notes: f.notes.value,
+    },
+    items: [...deliveryItemsBody.querySelectorAll("tr")].map((tr) => ({
+      description: tr.querySelector(".di-desc").value,
+      quantity: tr.querySelector(".di-qty").value,
+    })),
+  };
+}
+
+function applyDeliveryDraft(d) {
+  const f = $("#delivery-form");
+  const x = d.fields || {};
+  f.customer_name.value = x.customer_name || "";
+  f.customer_address.value = x.customer_address || "";
+  f.customer_contact_person.value = x.customer_contact_person || "";
+  f.notes.value = x.notes || "";
+  deliveryItemsBody.innerHTML = "";
+  for (const it of (d.items || [])) addDeliveryItemRow(it.description, it.quantity);
+  if (!deliveryItemsBody.children.length) addDeliveryItemRow();
+  setPendingCustomer("#delivery-customer-select", x.customer_id);
+}
+
+const DRAFTS = {
+  invoice: { collect: collectInvoiceDraft, apply: applyInvoiceDraft, reset: () => resetInvoiceForm() },
+  quote: { collect: collectQuoteDraft, apply: applyQuoteDraft, reset: () => resetQuoteForm() },
+  delivery: { collect: collectDeliveryDraft, apply: applyDeliveryDraft, reset: () => resetDeliveryForm() },
+};
+
+function restoreDrafts() {
+  const all = readDrafts();
+  let pruned = false;
+  for (const [name, entry] of Object.entries(all)) {
+    const tooOld = !entry || !entry.saved_at ||
+      (Date.now() - entry.saved_at) > DRAFT_MAX_AGE_MS;
+    if (!DRAFTS[name] || tooOld) { delete all[name]; pruned = true; continue; }
+    try {
+      DRAFTS[name].apply(entry.data || {});
+      showDraftBanner(name, entry.saved_at);
+    } catch (err) {
+      console.warn("Entwurf konnte nicht wiederhergestellt werden:", name, err);
+      delete all[name];
+      pruned = true;
+    }
+  }
+  if (pruned) writeDrafts(all);
+  updateDraftHints();
+}
+
+for (const [name, sel] of [["invoice", "#invoice-form"], ["quote", "#quote-form"],
+                           ["delivery", "#delivery-form"]]) {
+  const form = $(sel);
+  form.addEventListener("input", () => saveDraftSoon(name));
+  form.addEventListener("change", () => saveDraftSoon(name));
+}
+
+// Beim Verlassen der Seite noch offene Änderungen sofort sichern.
+window.addEventListener("beforeunload", () => {
+  for (const name of Object.keys(DRAFTS)) saveDraftNow(name);
+  stopPresence();
+});
+
+document.querySelectorAll("[data-discard-draft]").forEach((btn) => {
+  btn.onclick = () => DRAFTS[btn.dataset.discardDraft].reset();
+});
+
 // ---------------------- Init ----------------------
 async function loadCurrentUser() {
   try {
@@ -1199,6 +1783,7 @@ $("#export-month").value = todayISO().slice(0, 7);
 addItemRow();
 addQuoteItemRow();
 addDeliveryItemRow();
+restoreDrafts();
 loadCurrentUser();
 refreshCustomers();
 refreshProducts();

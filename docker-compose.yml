@@ -19,6 +19,10 @@ services:
     build: ./backend
     container_name: rechnung_web
     restart: unless-stopped
+    # Läuft nicht als root. Die Standard-UID entspricht dem Benutzer aus dem
+    # Dockerfile; scripts/setup-*.sh tragen hier die UID/GID des Host-Benutzers
+    # `rechnung` ein, damit Datei- und Prozessidentität zusammenpassen.
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
     depends_on:
       db:
         condition: service_healthy
@@ -37,6 +41,14 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       MAIL_FROM: ${MAIL_FROM:-rechnung@example.com}
       BACKUP_DIR: /backups
+      SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-false}
+      SESSION_MAX_AGE: ${SESSION_MAX_AGE:-43200}
+      CSRF_ENABLED: ${CSRF_ENABLED:-true}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-600}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN:-20}
+      HSTS_ENABLED: ${HSTS_ENABLED:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./backups:/backups:ro
     ports:

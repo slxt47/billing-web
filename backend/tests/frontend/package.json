@@ -1,0 +1,13 @@
+{
+  "name": "rechnung-frontend-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "jsdom-Tests für backend/app/static/app.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
