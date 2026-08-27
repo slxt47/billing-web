@@ -41,12 +41,21 @@
     <section id="view-new" hidden>
       <h2 id="invoice-form-title">Neue Rechnung erstellen</h2>
       <p id="lock-banner" class="warn-banner" hidden></p>
+      <p id="invoice-presence" class="presence-banner" hidden></p>
+      <p class="draft-banner" id="invoice-draft-banner" hidden>
+        <span class="draft-text"></span>
+        <button type="button" class="link" data-discard-draft="invoice">Entwurf verwerfen</button>
+      </p>
       <form id="invoice-form">
         <input type="hidden" name="invoice_id" value="">
         <label>Gespeicherter Kunde
-          <select id="customer-select">
-            <option value="">– neuen Kunden eingeben –</option>
-          </select>
+          <span class="picker">
+            <input type="search" id="customer-search" class="picker-search"
+                   placeholder="🔎 Kunde suchen (Name, E-Mail, Ansprechpartner)…" autocomplete="off">
+            <select id="customer-select">
+              <option value="">– neuen Kunden eingeben –</option>
+            </select>
+          </span>
         </label>
 
         <div class="grid">
@@ -114,8 +123,22 @@
     <!-- ============ ANGEBOTE ============ -->
     <section id="view-quotes" hidden>
       <h2 id="quote-form-title">Neues Angebot erstellen</h2>
+      <p id="quote-presence" class="presence-banner" hidden></p>
+      <p class="draft-banner" id="quote-draft-banner" hidden>
+        <span class="draft-text"></span>
+        <button type="button" class="link" data-discard-draft="quote">Entwurf verwerfen</button>
+      </p>
       <form id="quote-form">
         <input type="hidden" name="quote_id" value="">
+        <label>Gespeicherter Kunde
+          <span class="picker">
+            <input type="search" id="quote-customer-search" class="picker-search"
+                   placeholder="🔎 Kunde suchen (Name, E-Mail, Ansprechpartner)…" autocomplete="off">
+            <select id="quote-customer-select">
+              <option value="">– neuen Kunden eingeben –</option>
+            </select>
+          </span>
+        </label>
         <div class="grid">
           <label>Kundenname *
             <input type="text" name="customer_name" required>
@@ -161,6 +184,16 @@
       </form>
 
       <h3>Angebote</h3>
+      <div class="bar">
+        <input type="search" id="quote-search" class="grow" placeholder="Suche nach Nummer oder Kunde…">
+        <select id="quote-filter-status">
+          <option value="">Alle Status</option>
+          <option value="offen">offen</option>
+          <option value="angenommen">angenommen</option>
+          <option value="abgelehnt">abgelehnt</option>
+          <option value="umgewandelt">umgewandelt</option>
+        </select>
+      </div>
       <table id="quotes-table">
         <thead>
           <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th class="col-num">Betrag</th><th>Status</th><th>Aktionen</th></tr>
@@ -168,13 +201,28 @@
         <tbody id="quotes-body"></tbody>
       </table>
       <p id="quotes-empty" hidden>Noch keine Angebote erstellt.</p>
+      <p id="quotes-nomatch" hidden>Keine Angebote passen zur Suche.</p>
     </section>
 
     <!-- ============ LIEFERSCHEINE ============ -->
     <section id="view-delivery" hidden>
       <h2 id="delivery-form-title">Neuen Lieferschein erstellen</h2>
+      <p id="delivery-presence" class="presence-banner" hidden></p>
+      <p class="draft-banner" id="delivery-draft-banner" hidden>
+        <span class="draft-text"></span>
+        <button type="button" class="link" data-discard-draft="delivery">Entwurf verwerfen</button>
+      </p>
       <form id="delivery-form">
         <input type="hidden" name="delivery_id" value="">
+        <label>Gespeicherter Kunde
+          <span class="picker">
+            <input type="search" id="delivery-customer-search" class="picker-search"
+                   placeholder="🔎 Kunde suchen (Name, E-Mail, Ansprechpartner)…" autocomplete="off">
+            <select id="delivery-customer-select">
+              <option value="">– neuen Kunden eingeben –</option>
+            </select>
+          </span>
+        </label>
         <div class="grid">
           <label>Kundenname *
             <input type="text" name="customer_name" required>
@@ -208,6 +256,14 @@
       </form>
 
       <h3>Lieferscheine</h3>
+      <div class="bar">
+        <input type="search" id="delivery-search" class="grow" placeholder="Suche nach Nummer oder Kunde…">
+        <select id="delivery-filter-status">
+          <option value="">Alle Status</option>
+          <option value="offen">offen</option>
+          <option value="storniert">storniert</option>
+        </select>
+      </div>
       <table id="delivery-table">
         <thead>
           <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
@@ -215,6 +271,7 @@
         <tbody id="delivery-body"></tbody>
       </table>
       <p id="delivery-empty" hidden>Noch keine Lieferscheine erstellt.</p>
+      <p id="delivery-nomatch" hidden>Keine Lieferscheine passen zur Suche.</p>
     </section>
 
     <!-- ============ HISTORY ============ -->
@@ -286,6 +343,15 @@
       </form>
 
       <h3>Gespeicherte Kunden</h3>
+      <div class="bar">
+        <input type="search" id="customer-list-search" class="grow"
+               placeholder="Suche nach Name, E-Mail, Ansprechpartner oder Anschrift…">
+        <select id="customer-filter-active">
+          <option value="">Alle</option>
+          <option value="1">nur aktive</option>
+          <option value="0">nur inaktive</option>
+        </select>
+      </div>
       <table id="customers-table">
         <thead>
           <tr><th>Name</th><th>E-Mail</th><th>Ansprechpartner</th><th>Anschrift</th><th>Zahlungsfrist</th><th>Skonto</th><th>Status</th><th>Aktionen</th></tr>
@@ -293,6 +359,7 @@
         <tbody id="customers-body"></tbody>
       </table>
       <p id="customers-empty" hidden>Noch keine Kunden gespeichert.</p>
+      <p id="customers-nomatch" hidden>Keine Kunden passen zur Suche.</p>
     </section>
 
     <!-- ============ ARTIKEL / LEISTUNGEN ============ -->
@@ -316,6 +383,14 @@
       </form>
 
       <h3>Gespeicherte Artikel</h3>
+      <div class="bar">
+        <input type="search" id="product-list-search" class="grow" placeholder="Suche nach Bezeichnung…">
+        <select id="product-filter-active">
+          <option value="">Alle</option>
+          <option value="1">nur aktive</option>
+          <option value="0">nur inaktive</option>
+        </select>
+      </div>
       <table id="products-table">
         <thead>
           <tr><th>Bezeichnung</th><th>Standardpreis</th><th>Status</th><th>Aktionen</th></tr>
@@ -323,6 +398,7 @@
         <tbody id="products-body"></tbody>
       </table>
       <p id="products-empty" hidden>Noch keine Artikel gespeichert.</p>
+      <p id="products-nomatch" hidden>Keine Artikel passen zur Suche.</p>
     </section>
 
     <!-- ============ FIRMA / EINSTELLUNGEN (nur Admin) ============ -->
@@ -391,6 +467,9 @@
       </form>
 
       <h3>Vorhandene Benutzer</h3>
+      <div class="bar">
+        <input type="search" id="user-search" class="grow" placeholder="Benutzer suchen…">
+      </div>
       <table id="users-table">
         <thead>
           <tr><th>Benutzername</th><th>Rolle</th><th>Aktionen</th></tr>
@@ -404,6 +483,10 @@
       <h2>Audit-Log</h2>
       <p class="hint">Protokoll der Zugriffe auf personenbezogene Daten
         (DSGVO-Export, Anonymisierung) sowie sicherheitsrelevanter Admin-Aktionen.</p>
+      <div class="bar">
+        <input type="search" id="audit-search" class="grow"
+               placeholder="Suche nach Benutzer, Aktion, Ziel oder Details…">
+      </div>
       <table id="audit-table">
         <thead>
           <tr><th>Zeitpunkt</th><th>Benutzer</th><th>Aktion</th><th>Ziel</th><th>Details</th></tr>

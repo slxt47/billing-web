@@ -214,6 +214,52 @@ tr.inactive-row { opacity: 0.55; }
   text-align: center; font-size: 0.85rem;
 }
 
+/* Such-/Filterleiste über den Listen */
+.bar input[type="search"], .bar select { margin: 0; }
+.bar .grow { flex: 1 1 220px; min-width: 160px; }
+
+/* Kundenauswahl im Beleg-Formular: Suchfeld + Auswahlliste */
+.picker { display: flex; gap: 0.5rem; align-items: center; }
+.picker .picker-search { flex: 0 1 45%; margin-top: 0.25rem; }
+.picker select { flex: 1 1 55%; }
+@media (max-width: 600px) {
+  .picker { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+  .picker .picker-search, .picker select { flex: 1 1 auto; }
+}
+
+/* Live-Anzeige: wer hat denselben Beleg gerade offen */
+.presence-banner {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  background: var(--card-2); color: var(--text);
+  border: 1px solid var(--border); border-left: 3px solid var(--orange);
+  border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem;
+}
+.presence-dot { cursor: help; font-size: 0.9em; }
+
+/* Markierung am Reiter, wenn dort ein ungespeicherter Entwurf liegt */
+nav button.has-draft::after {
+  content: "●";
+  margin-left: 0.35rem;
+  font-size: 0.7em;
+  vertical-align: super;
+  color: var(--primary);
+}
+nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #fff; }
+
+/* Hinweis auf wiederhergestellte, noch nicht gespeicherte Eingaben */
+.draft-banner {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  background: var(--card-2); border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem;
+}
+.draft-banner .draft-text { flex: 1; color: var(--muted); }
+.draft-banner button.link {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text); padding: 0.25rem 0.6rem; font-size: 0.8rem;
+}
+.draft-banner button.link:hover { border-color: var(--red); color: var(--red); }
+
 /* ===== Light Mode ===== */
 :root[data-theme="light"] {
   --bg: #f5f7fa;

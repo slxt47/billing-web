@@ -18,6 +18,32 @@ _DOC_NUMBER_LOCK_KEY = 815470
 LOCK_TIMEOUT = timedelta(minutes=5)
 
 
+def _lock_doc_numbers(db: Session) -> None:
+    """Serialisiert die Vergabe der Belegnummern über alle gleichzeitigen
+    Anfragen hinweg. Der Advisory-Lock ist PostgreSQL-spezifisch; die
+    Testsuite läuft gegen SQLite (Single-Writer, kein paralleles Schreiben),
+    dort ist er weder nötig noch verfügbar."""
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                   {"k": _DOC_NUMBER_LOCK_KEY})
+
+
+def _page(query, limit: int | None, offset: int = 0) -> tuple[list, int]:
+    """Schneidet eine Ergebnisliste auf ein Fenster zu.
+
+    Rückgabe: (Zeilen, Gesamtzahl vor der Begrenzung). Ohne `limit` kommen
+    weiterhin alle Zeilen zurück – das Frontend hält kleine Listen komplett
+    im Speicher und filtert dort. `limit` deckelt zusätzlich hart bei
+    config.MAX_PAGE_SIZE, damit ein API-Client den Server nicht mit
+    ?limit=999999 belasten kann."""
+    total = query.order_by(None).count()
+    if offset:
+        query = query.offset(offset)
+    if limit:
+        query = query.limit(min(limit, config.MAX_PAGE_SIZE))
+    return query.all(), total
+
+
 def _table_max_suffix(db: Session, model_cls, prefix: str, year: int) -> int:
     p = f"{prefix}-{year}-"
     last = (
@@ -70,8 +96,7 @@ def create_invoice(db: Session, data: schemas.InvoiceIn) -> models.Invoice:
     # Lock serialisiert nur die Nummernvergabe, sodass keine zwei Belege
     # dieselbe Nummer erhalten. Der Lock wird mit dem Commit/Rollback freigegeben.
     for _ in range(10):
-        db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
-                   {"k": _DOC_NUMBER_LOCK_KEY})
+        _lock_doc_numbers(db)
         year = date.today().year
         number = f"RE-{year}-{_next_doc_suffix(db, year):04d}"
         invoice = _build_invoice(data, number)
@@ -86,7 +111,8 @@ def create_invoice(db: Session, data: schemas.InvoiceIn) -> models.Invoice:
     raise RuntimeError("Konnte keine eindeutige Rechnungsnummer vergeben")
 
 
-def list_invoices(db: Session, search: str | None = None) -> list[models.Invoice]:
+def list_invoices(db: Session, search: str | None = None,
+                  limit: int | None = None, offset: int = 0) -> tuple[list, int]:
     """History: alle Rechnungen, neueste zuerst, optional gefiltert."""
     query = db.query(models.Invoice)
     if search:
@@ -95,7 +121,7 @@ def list_invoices(db: Session, search: str | None = None) -> list[models.Invoice
             models.Invoice.number.ilike(like)
             | models.Invoice.customer_name.ilike(like)
         )
-    return query.order_by(models.Invoice.id.desc()).all()
+    return _page(query.order_by(models.Invoice.id.desc()), limit, offset)
 
 
 def get_invoice(db: Session, invoice_id: int) -> models.Invoice | None:
@@ -200,6 +226,74 @@ def release_lock(db: Session, invoice: models.Invoice, username: str) -> None:
         db.commit()
 
 
+# --------------------------- Anwesenheit (Live-Anzeige) ------------------
+# Ein Client meldet sich alle PRESENCE_HEARTBEAT Sekunden; wer sich länger
+# als PRESENCE_TIMEOUT nicht gemeldet hat, gilt als weg (Tab geschlossen,
+# Rechner zugeklappt). Der Puffer ist bewusst großzügig, damit ein kurzer
+# Netzaussetzer niemanden aus der Anzeige wirft.
+PRESENCE_HEARTBEAT = timedelta(seconds=10)
+PRESENCE_TIMEOUT = timedelta(seconds=45)
+
+
+def _purge_stale_presence(db: Session) -> None:
+    cutoff = datetime.utcnow() - PRESENCE_TIMEOUT
+    db.query(models.Presence).filter(models.Presence.last_seen < cutoff).delete(
+        synchronize_session=False)
+
+
+def touch_presence(db: Session, doc_type: str, doc_id: int,
+                   username: str) -> list[models.Presence]:
+    """Meldet den Benutzer als anwesend und liefert die *anderen* Anwesenden.
+
+    Beim Wechsel auf einen anderen Beleg räumt die Funktion die alten
+    Einträge desselben Benutzers gleich mit weg – sonst würde er auf mehreren
+    Belegen gleichzeitig angezeigt, wenn er nur weitergeklickt hat.
+    """
+    _purge_stale_presence(db)
+    now = datetime.utcnow()
+
+    db.query(models.Presence).filter(
+        models.Presence.username == username,
+        (models.Presence.doc_type != doc_type) | (models.Presence.doc_id != doc_id),
+    ).delete(synchronize_session=False)
+
+    row = db.query(models.Presence).filter_by(
+        doc_type=doc_type, doc_id=doc_id, username=username).one_or_none()
+    if row:
+        row.last_seen = now
+    else:
+        db.add(models.Presence(doc_type=doc_type, doc_id=doc_id,
+                               username=username, last_seen=now))
+    try:
+        db.commit()
+    except IntegrityError:
+        # Zwei parallele Heartbeats desselben Benutzers – der andere war
+        # zuerst da, sein Eintrag ist genauso gut wie unserer.
+        db.rollback()
+
+    return [p for p in active_presence(db, doc_type, doc_id)
+            if p.username != username]
+
+
+def leave_presence(db: Session, doc_type: str, doc_id: int, username: str) -> None:
+    db.query(models.Presence).filter_by(
+        doc_type=doc_type, doc_id=doc_id, username=username).delete(
+            synchronize_session=False)
+    db.commit()
+
+
+def active_presence(db: Session, doc_type: str | None = None,
+                    doc_id: int | None = None) -> list[models.Presence]:
+    """Alle aktuell Anwesenden – optional auf einen Beleg eingegrenzt."""
+    cutoff = datetime.utcnow() - PRESENCE_TIMEOUT
+    q = db.query(models.Presence).filter(models.Presence.last_seen >= cutoff)
+    if doc_type:
+        q = q.filter(models.Presence.doc_type == doc_type)
+    if doc_id is not None:
+        q = q.filter(models.Presence.doc_id == doc_id)
+    return q.order_by(models.Presence.username.asc()).all()
+
+
 def dashboard_stats(db: Session) -> dict:
     """Kennzahlen + Monatsumsatz der letzten 6 Monate (nur nicht stornierte)."""
     invoices = (
@@ -253,11 +347,17 @@ def invoices_in_month(db: Session, year: int, month: int) -> list[models.Invoice
 
 
 # --------------------------- Kunden -------------------------------------
-def list_customers(db: Session, active_only: bool = False) -> list[models.Customer]:
+def list_customers(db: Session, active_only: bool = False, search: str | None = None,
+                   limit: int | None = None, offset: int = 0) -> tuple[list, int]:
     q = db.query(models.Customer)
     if active_only:
         q = q.filter(models.Customer.active.is_(True))
-    return q.order_by(models.Customer.name.asc()).all()
+    if search:
+        like = f"%{search}%"
+        q = q.filter(models.Customer.name.ilike(like)
+                     | models.Customer.email.ilike(like)
+                     | models.Customer.contact_person.ilike(like))
+    return _page(q.order_by(models.Customer.name.asc()), limit, offset)
 
 
 def create_customer(db: Session, data: schemas.CustomerIn) -> models.Customer:
@@ -346,11 +446,14 @@ def anonymize_customer(db: Session, customer: models.Customer) -> models.Custome
 
 
 # --------------------------- Artikel / Leistungen -----------------------
-def list_products(db: Session, active_only: bool = False) -> list[models.Product]:
+def list_products(db: Session, active_only: bool = False, search: str | None = None,
+                  limit: int | None = None, offset: int = 0) -> tuple[list, int]:
     q = db.query(models.Product)
     if active_only:
         q = q.filter(models.Product.active.is_(True))
-    return q.order_by(models.Product.name.asc()).all()
+    if search:
+        q = q.filter(models.Product.name.ilike(f"%{search}%"))
+    return _page(q.order_by(models.Product.name.asc()), limit, offset)
 
 
 def create_product(db: Session, data: schemas.ProductIn) -> models.Product:
@@ -486,20 +589,16 @@ def log_action(db: Session, username: str, action: str, target_type: str,
     db.commit()
 
 
-def list_audit_log(db: Session, limit: int = 200) -> list[models.AuditLog]:
-    return (
-        db.query(models.AuditLog)
-        .order_by(models.AuditLog.id.desc())
-        .limit(limit)
-        .all()
-    )
+def list_audit_log(db: Session, limit: int | None = 200,
+                   offset: int = 0) -> tuple[list, int]:
+    return _page(db.query(models.AuditLog).order_by(models.AuditLog.id.desc()),
+                 limit, offset)
 
 
 # --------------------------- Angebote (Quotes) ---------------------------
 def create_quote(db: Session, data: schemas.QuoteIn) -> models.Quote:
     for _ in range(10):
-        db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
-                   {"k": _DOC_NUMBER_LOCK_KEY})
+        _lock_doc_numbers(db)
         year = date.today().year
         number = f"AN-{year}-{_next_doc_suffix(db, year):04d}"
         quote = models.Quote(
@@ -530,8 +629,14 @@ def create_quote(db: Session, data: schemas.QuoteIn) -> models.Quote:
     raise RuntimeError("Konnte keine eindeutige Angebotsnummer vergeben")
 
 
-def list_quotes(db: Session) -> list[models.Quote]:
-    return db.query(models.Quote).order_by(models.Quote.id.desc()).all()
+def list_quotes(db: Session, search: str | None = None,
+                limit: int | None = None, offset: int = 0) -> tuple[list, int]:
+    q = db.query(models.Quote)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(models.Quote.number.ilike(like)
+                     | models.Quote.customer_name.ilike(like))
+    return _page(q.order_by(models.Quote.id.desc()), limit, offset)
 
 
 def get_quote(db: Session, quote_id: int) -> models.Quote | None:
@@ -589,7 +694,7 @@ def convert_quote_to_invoice(db: Session, quote: models.Quote) -> models.Invoice
     )
     _, year, suffix = quote.number.split("-")
     number = f"RE-{year}-{suffix}"
-    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _DOC_NUMBER_LOCK_KEY})
+    _lock_doc_numbers(db)
     invoice = _build_invoice(invoice_data, number)
     db.add(invoice)
     try:
@@ -625,8 +730,7 @@ def _build_delivery_note(data: schemas.DeliveryNoteIn, number: str,
 
 def create_delivery_note(db: Session, data: schemas.DeliveryNoteIn) -> models.DeliveryNote:
     for _ in range(10):
-        db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
-                   {"k": _DOC_NUMBER_LOCK_KEY})
+        _lock_doc_numbers(db)
         year = date.today().year
         number = f"LS-{year}-{_next_doc_suffix(db, year):04d}"
         dn = _build_delivery_note(data, number)
@@ -641,8 +745,14 @@ def create_delivery_note(db: Session, data: schemas.DeliveryNoteIn) -> models.De
     raise RuntimeError("Konnte keine eindeutige Lieferscheinnummer vergeben")
 
 
-def list_delivery_notes(db: Session) -> list[models.DeliveryNote]:
-    return db.query(models.DeliveryNote).order_by(models.DeliveryNote.id.desc()).all()
+def list_delivery_notes(db: Session, search: str | None = None,
+                        limit: int | None = None, offset: int = 0) -> tuple[list, int]:
+    q = db.query(models.DeliveryNote)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(models.DeliveryNote.number.ilike(like)
+                     | models.DeliveryNote.customer_name.ilike(like))
+    return _page(q.order_by(models.DeliveryNote.id.desc()), limit, offset)
 
 
 def get_delivery_note(db: Session, delivery_note_id: int) -> models.DeliveryNote | None:
@@ -693,7 +803,7 @@ def convert_invoice_to_delivery_note(db: Session, invoice: models.Invoice) -> mo
     )
     _, year, suffix = invoice.number.split("-")
     number = f"LS-{year}-{suffix}"
-    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _DOC_NUMBER_LOCK_KEY})
+    _lock_doc_numbers(db)
     dn = _build_delivery_note(dn_data, number, source_invoice_id=invoice.id)
     db.add(dn)
     try:

@@ -151,6 +151,26 @@ class CustomerExportOut(BaseModel):
     exported_at: datetime
 
 
+class PresenceUserOut(BaseModel):
+    username: str
+    last_seen: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PresenceDocOut(BaseModel):
+    """Anwesende je Beleg – für die Markierung in den Listen."""
+    doc_type: str
+    doc_id: int
+    users: list[PresenceUserOut]
+
+
+class PresenceOut(BaseModel):
+    """Antwort auf einen Heartbeat: alle anderen auf demselben Beleg."""
+    others: list[PresenceUserOut]
+
+
 class AuditLogOut(BaseModel):
     id: int
     timestamp: datetime

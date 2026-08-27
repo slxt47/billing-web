@@ -10,8 +10,12 @@
 #   - erwartet, dass Docker bereits installiert ist (kein "apt install")
 #   - erzeugt eine frische .env mit zufälligen Test-Zugangsdaten, damit die
 #     Test-Instanz nicht die Standard-Zugangsdaten admin/admin verwendet
+#   - legt den Dienstbenutzer `rechnung` an und übergibt ihm die Dateien,
+#     damit auch die Testinstanz nicht als root läuft
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=scripts/lib-common.sh
+. "$(dirname "$0")/lib-common.sh"
 
 echo "=== Rechnungs-App: Test-Umgebung (ohne Let's Encrypt) ==="
 echo
@@ -33,16 +37,6 @@ echo
 echo "Richte .env für die Test-Umgebung ein..."
 cp .env.example .env
 
-rand() { openssl rand -hex "$1" 2>/dev/null || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-_set_env() {
-  local key="$1" value="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i.tmp "s#^${key}=.*#${key}=${value}#" .env && rm -f .env.tmp
-  else
-    echo "${key}=${value}" >> .env
-  fi
-}
-
 _set_env SESSION_SECRET "$(rand 32)"
 _set_env POSTGRES_PASSWORD "test_$(rand 8)"
 _set_env ADMIN_USER "admin"
@@ -52,6 +46,11 @@ _set_env APP_USERS "tester:tester123"
 echo "✓ .env mit zufälligen Test-Zugangsdaten erzeugt."
 echo "  Admin-Login: admin / $ADMIN_PASSWORD"
 echo "  (E-Mail-Versand bleibt über MailHog, kein echter SMTP-Versand.)"
+
+echo
+echo "-- Dienstbenutzer --"
+ensure_app_user || true
+own_app_files "$PWD" || true
 
 echo
 echo "Baue und starte die Docker-Container..."

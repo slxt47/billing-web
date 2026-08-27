@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 
 from sqlalchemy import (
     Column, Integer, String, Date, DateTime, Numeric, ForeignKey, Text, Boolean,
-    LargeBinary
+    LargeBinary, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 
@@ -186,6 +186,40 @@ class InvoiceItem(Base):
     @property
     def line_total(self):
         return round(float(self.quantity) * float(self.unit_price), 2)
+
+
+# Belegarten, für die eine Anwesenheitsanzeige geführt wird
+PRESENCE_INVOICE = "invoice"
+PRESENCE_QUOTE = "quote"
+PRESENCE_DELIVERY_NOTE = "delivery_note"
+PRESENCE_TYPES = (PRESENCE_INVOICE, PRESENCE_QUOTE, PRESENCE_DELIVERY_NOTE)
+
+class Presence(Base):
+    """Wer hat gerade welchen Beleg offen – Grundlage der Live-Anzeige
+    „jemand anderes ist auch hier".
+
+    Ergänzt die Bearbeitungssperre auf Rechnungen (die verhindert, dass zwei
+    Leute gleichzeitig speichern) um die fehlende Rückmeldung *währenddessen*
+    – und deckt zusätzlich Angebote und Lieferscheine ab, die gar keine
+    Sperre haben.
+
+    Die Zeilen sind kurzlebig: ein Client meldet sich alle paar Sekunden,
+    Einträge ohne Lebenszeichen gelten nach PRESENCE_TIMEOUT als weg und
+    werden beim nächsten Zugriff aufgeräumt. Bewusst in der Datenbank statt
+    im Prozessspeicher, damit die Anzeige auch bei mehreren `web`-Repliken
+    stimmt.
+    """
+    __tablename__ = "presence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doc_type = Column(String(20), nullable=False, index=True)
+    doc_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(80), nullable=False)
+    last_seen = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("doc_type", "doc_id", "username", name="uq_presence_doc_user"),
+    )
 
 
 class AuditLog(Base):

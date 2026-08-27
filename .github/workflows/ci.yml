@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  tests:
+    name: Backend-Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Abhängigkeiten installieren
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Tests
+        working-directory: backend
+        run: python -m pytest
+
+  frontend-tests:
+    name: Frontend-Tests (jsdom)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: jsdom installieren
+        working-directory: backend/tests/frontend
+        run: npm install --no-audit --no-fund
+
+      - name: Tests
+        working-directory: backend/tests/frontend
+        run: npm test
+
+  static-checks:
+    name: Syntax-Prüfungen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python kompilieren
+        run: python -m compileall -q backend/app
+
+      - name: Shell-Skripte prüfen
+        run: |
+          for f in scripts/*.sh; do bash -n "$f"; done
+          if command -v shellcheck >/dev/null; then shellcheck -S warning scripts/*.sh || true; fi
+
+      - name: JavaScript prüfen
+        run: |
+          for f in backend/app/static/*.js; do node --check "$f"; done
+
+  docker-build:
+    name: Container-Image bauen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image bauen
+        run: docker build -t rechnung-web:ci ./backend
+
+      - name: Läuft nicht als root
+        run: |
+          uid="$(docker run --rm --entrypoint id rechnung-web:ci -u)"
+          echo "Container-UID: $uid"
+          test "$uid" != "0"
+
+      - name: docker-compose.yml validieren
+        run: docker compose -f docker-compose.yml config >/dev/null

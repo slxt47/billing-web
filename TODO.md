@@ -6,11 +6,16 @@ RECHNUNGS-APP - DEVELOPMENT ROADMAP (TODO.md)
 | 📋 DEVELOPMENT TASKS |
 +---------------------+
 
-Status re-audited against the actual code in backend/app/ on 2026-08-25 —
-the previous version of this file had almost everything checked off,
-including several items (CI/CD, load balancing, multi-currency, a custom
-report builder, a full test suite...) that do not exist anywhere in the
-repo. This version only marks an item [X] if it is verifiably implemented.
+Status re-audited against the actual code in backend/app/ on 2026-08-27.
+An item is only marked [X] if it is verifiably implemented — the file name
+and, where useful, the function are named next to it so the claim can be
+checked in seconds. The 2026-08-27 pass added the security middleware layer
+(CSRF/rate limiting/headers), structured logging, API pagination, the
+non-root service user, the test suites (139 backend + 27 frontend tests) and
+the GitHub Actions pipeline; those lines moved from [ ] to [X] and the docs
+were updated to match. It also delivered the four [FEATURE REQUEST] items at
+the bottom of this file and both entries from the former IDEAS section (live
+presence indicator, payment-confirmation alignment).
 
 [SECURITY & PRODUCTION]
 [X] PBKDF2 password hashing (200k iterations, per-user salt)
@@ -22,11 +27,26 @@ repo. This version only marks an item [X] if it is verifiably implemented.
 [X] GDPR/DSGVO: customer anonymization (Art. 17, admin-only)
 [X] GDPR/DSGVO: audit log of access to personal data
 [X] Backup path-traversal protection (strict filename validation)
-[ ] CSRF protection for forms
-[ ] General API rate limiting (only login has brute-force protection)
-[ ] Security response headers (CSP, X-Frame-Options, HSTS, ...)
-[ ] Session cookie hardening (https_only/secure flag not set explicitly)
-[ ] Automated security audit / pen test
+[X] CSRF protection (security.csrf_middleware): per-session token, required
+    in the X-CSRF-Token header on every writing request; /login checks the
+    csrf_token form field instead. Toggle via CSRF_ENABLED.
+[X] General API rate limiting (security.rate_limit_middleware): sliding
+    window per IP, 600/60s by default plus a stricter 20/300s bucket for
+    POST /login; answers 429 with Retry-After. Configurable via
+    RATE_LIMIT_* in .env.
+[X] Security response headers (security.apply_security_headers): CSP,
+    X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
+    Permissions-Policy, Cross-Origin-Opener-Policy, plus HSTS on HTTPS.
+[X] Session cookie hardening: SameSite=Strict, max_age (SESSION_MAX_AGE,
+    12h default), secure flag via SESSION_HTTPS_ONLY (set by
+    scripts/setup-prod.sh); session cleared on login against fixation.
+[X] Container/process no longer runs as root (backend/Dockerfile creates and
+    switches to user `rechnung`; scripts/lib-common.sh creates the matching
+    host user and hands the project directory over to it)
+[X] Frontend escapes database values before rendering (app.js: esc()); a
+    customer name or article description containing HTML can no longer break
+    out of the table markup. Item rows set their values via the DOM.
+[ ] Automated security audit / external pen test
 
 [CORE FUNCTIONALITY]
 [X] Server-side input validation (Pydantic schemas on every request body)
@@ -34,13 +54,30 @@ repo. This version only marks an item [X] if it is verifiably implemented.
     (shared per-year sequence, PostgreSQL advisory lock)
 [X] Edit lock on invoices (prevents two users editing the same invoice at
     once, auto-expires after 5 minutes)
+[X] Live presence indicator ("someone else has this open"): a client with a
+    document open sends a heartbeat every 10s to
+    POST /api/presence/{doc_type}/{doc_id} and gets back everyone else on
+    that document; the form shows a banner and the lists mark those rows.
+    Covers invoices, quotes AND delivery notes — the latter two have no edit
+    lock at all. Entries expire 45s after the last heartbeat, so a closed
+    tab cleans itself up. Polling, not WebSockets (see
+    Technical_documentation.md for why). Table `presence`, crud.touch_presence.
 [X] Partial payments with automatic status transitions (offen -> teilbezahlt
     -> bezahlt)
 [X] Discount (%) and Kleinunternehmer / §19 UStG mode (no VAT)
 [X] Skonto (early-payment discount) calculation and PDF display
 [X] Idempotent schema migrations on startup (ADD COLUMN IF NOT EXISTS)
-[ ] Automated test suite (none found in the repo)
-[ ] Centralized/structured error handling & logging beyond FastAPI defaults
+[X] Automated test suite: 139 pytest tests in backend/tests/ against a
+    temporary SQLite DB (conftest.py) — invoices, quotes, delivery notes,
+    customers/products, admin endpoints, audit log and the security layer.
+    Run with `python -m pytest` in backend/. Plus 27 frontend tests in
+    backend/tests/frontend/ that drive the real index.html + app.js in jsdom
+    (customer picker, draft cache, list filters, CSRF header, escaping) —
+    `npm install && npm test`, needs Node >= 20.
+[X] Centralized/structured error handling & logging (logging_setup.py):
+    JSON log lines, per-request X-Request-ID carried into every line and
+    every error body, uniform {"detail", "request_id"} responses for HTTP,
+    validation and unhandled errors.
 
 [DOCUMENTS: INVOICES / QUOTES / DELIVERY NOTES]
 [X] Edit an existing (non-cancelled) invoice
@@ -50,7 +87,10 @@ repo. This version only marks an item [X] if it is verifiably implemented.
     generate from an existing invoice
 [X] Invoice/quote/delivery-note PDF generation incl. GiroCode/EPC-QR
 [X] Email sending for invoices, quotes, delivery notes, payment reminders,
-    and automatic payment confirmation on full settlement
+    and automatic payment confirmation on full settlement — fires on BOTH
+    ways of settling an invoice now (POST .../payment and
+    PATCH .../status {"status":"bezahlt"}), only on the transition, and a
+    failing SMTP server never breaks the payment (main._confirm_payment_if_settled)
 [X] Monthly export as ZIP (PDF per invoice + CSV summary)
 [ ] Recurring invoices
 [ ] Approval workflow
@@ -82,18 +122,25 @@ repo. This version only marks an item [X] if it is verifiably implemented.
 [X] Backup management UI for admins (list, download, restore with double
     confirmation)
 [X] Guided setup scripts (scripts/setup-test.sh, scripts/setup-prod.sh)
-[ ] CI/CD pipeline
-[ ] Application monitoring / observability
+[X] CI pipeline (.github/workflows/ci.yml): backend tests, frontend tests,
+    static checks (compileall, bash -n/shellcheck, node --check) and a Docker
+    image build that asserts the container UID is not 0 and that compose
+    config is valid. Runs on every push and pull request. (No CD/deploy
+    stage.)
+[ ] Application monitoring / observability (structured logs exist, but no
+    metrics endpoint, dashboard or alerting)
 [ ] Horizontal scaling / load balancing (single `web` container by design;
     in-memory login-lockout state would not survive multiple replicas)
 [ ] Response caching layer
-[ ] API pagination (list endpoints return all rows; only the audit log has
-    an internal limit)
+[X] API pagination: ?limit=(1..MAX_PAGE_SIZE)&offset= on invoices, quotes,
+    delivery notes, customers, products and the audit log; the total always
+    comes back in the X-Total-Count header. Without ?limit the full list is
+    returned, so older callers keep working.
 
 [DOCUMENTATION]
 [X] README.md reflects the actual current feature set
 [X] Technical_documentation.md reflects the actual current architecture/API
-[ ] Dedicated troubleshooting guide
+[X] Dedicated troubleshooting guide (TROUBLESHOOTING.md)
 [ ] Diagrams beyond the ASCII architecture sketch in Technical_documentation.md
 
 [KNOWN ISSUES]
@@ -103,23 +150,59 @@ repo. This version only marks an item [X] if it is verifiably implemented.
     configured for a real provider
 [ ] Default admin/admin and test-user credentials must be changed before any
     real deployment (setup-prod.sh generates strong ones automatically)
-[ ] Login-lockout state is in-memory and per-process — resets on restart,
-    won't work correctly if `web` is ever scaled beyond one replica
-[ ] No automated tests to catch regressions
+[ ] Login-lockout AND rate-limit counters are both in-memory: correct for
+    the single `web` container the compose file defines, but they would need
+    a shared store (Redis o. ä.) before scaling out
 
 [FEATURE REQUEST]
-[ ] When creating an **Angebot** (quotation) or **Lieferschein** (delivery note), it should be possible to select and use an existing saved **Kunde** (customer), similar to the current functionality available for **Rechnungen** (invoices).
-[ ] Implement **smart caching** so that entered data is preserved after a page reload and automatically restored when reopening the application.
-[ ] Add **search and filter functionality** to all relevant views, lists, and selection fields to improve usability and make navigation easier.
-[ ] When running either the **test** or **production** environment, automatically create a dedicated non-root user (e.g. `rechnung`). Application files and directories should be owned by this user instead of `root` to improve security and maintainability.
+[X] Customer selection when creating an **Angebot** or **Lieferschein**, same
+    as for **Rechnungen** — one shared, searchable customer picker
+    (app.js: registerCustomerPicker) on all three forms; only active
+    customers are offered and picking one fills in the master data.
+[X] **Smart caching** of entered data: invoice/quote/delivery-note forms are
+    saved to localStorage as you type (debounced, key rechnung.drafts.v1)
+    and restored on reload; drafts expire after 7 days and never leave the
+    browser.
+[X] **Search and filter** in all relevant views and selection fields:
+    invoice/quote/delivery-note lists (search + status filter), customers and
+    products (search + active filter), users, audit log, and the customer
+    picker on all three document forms.
+[X] Dedicated non-root user for the test and production environment:
+    scripts/lib-common.sh creates the host user `rechnung` (idempotent, both
+    setup scripts use it), hands the project files to it and writes the
+    matching APP_UID/APP_GID into .env so the container runs under the same
+    identity. Falls back gracefully with a warning if it cannot get root.
 
+
+---------------------------------------------------------------------------
+STILL OPEN (unchanged by the 2026-08-27 pass)
+---------------------------------------------------------------------------
+The remaining [ ] items are real product/infrastructure work, not oversights:
+recurring invoices, approval workflow, credit notes as their own document
+type, multi-currency, custom PDF templates, document attachments, customer
+groups, credit limits, customer notes, CSV import/export, a custom report
+builder, a VAT-return export, P&L reporting, monitoring, a response cache,
+horizontal scaling (needs shared state for the login lockout and the
+rate-limit counters), an external pen test, and diagrams beyond the ASCII
+sketch. The known issues around self-signed certificates, MailHog as the
+default transport and the default credentials are all addressed by
+scripts/setup-prod.sh but remain the defaults until it is run.
 
 ---------------------------------------------------------------------------
 IDEAS / NOT YET SCHEDULED
 ---------------------------------------------------------------------------
-Live/real-time collaborative editing indicator on invoices (today: a
-5-minute edit lock prevents conflicting edits, but there is no live
-"someone else is viewing this" indicator or field-level merge). Automatic
-payment-confirmation email also only fires via the payment endpoint, not
-when an invoice is marked "bezahlt" directly through the status endpoint —
-worth aligning if that gap turns out to matter in practice.
+Both former entries here were implemented on 2026-08-27 and moved into the
+lists above:
+
+  * Live collaborative indicator -> "someone else has this open" now shows as
+    a banner over the form and as a marker in the lists, for invoices, quotes
+    and delivery notes. What is still NOT there is field-level merge: two
+    people editing the same quote or delivery note can still overwrite each
+    other, they just see each other now. Invoices remain protected by the
+    edit lock. A real lock for quotes/delivery notes, or per-field merging,
+    would be the next step if that turns out to hurt in practice.
+  * Payment-confirmation email -> now sent from whichever path settles the
+    invoice, so the customer gets the same mail whether the clerk records a
+    payment or flips the status to "bezahlt".
+
+Nothing else is currently parked here. New ideas go below this line.
