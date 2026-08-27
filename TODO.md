@@ -107,6 +107,12 @@ repo. This version only marks an item [X] if it is verifiably implemented.
     won't work correctly if `web` is ever scaled beyond one replica
 [ ] No automated tests to catch regressions
 
+[FEATURE REQUEST]
+[ ] When creating an **Angebot** (quotation) or **Lieferschein** (delivery note), it should be possible to select and use an existing saved **Kunde** (customer), similar to the current functionality available for **Rechnungen** (invoices).
+[ ] Implement **smart caching** so that entered data is preserved after a page reload and automatically restored when reopening the application.
+[ ] Add **search and filter functionality** to all relevant views, lists, and selection fields to improve usability and make navigation easier.
+[ ] When running either the **test** or **production** environment, automatically create a dedicated non-root user (e.g. `rechnung`). Application files and directories should be owned by this user instead of `root` to improve security and maintainability.
+
 
 ---------------------------------------------------------------------------
 IDEAS / NOT YET SCHEDULED
