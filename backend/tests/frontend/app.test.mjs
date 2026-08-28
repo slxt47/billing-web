@@ -763,6 +763,101 @@ test("Die Dateiauswahl selbst ist nicht sichtbar", async () => {
   assert.equal(window.document.querySelector("#customer-import-file").hidden, true);
 });
 
+// -------------------------------- Keine Umwandlung doppelt
+const INVOICE_ROW = {
+  id: 3, number: "RE-2026-0003", customer_name: "Alpha AG", issue_date: "2026-01-10",
+  total: 100, remaining: 0, status: "bezahlt", is_overdue: false, items: [],
+};
+
+test("Eine Rechnung mit Lieferschein bietet keine zweite Umwandlung an", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/invoices": [{ ...INVOICE_ROW, delivery_note_number: "LS-2026-0003" }],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const row = window.document.querySelector("#history-body tr");
+  assert.equal(row.querySelector("button[data-act=to-delivery]"), null,
+               "kein Knopf „Lieferschein“ mehr");
+  const marker = row.querySelector(".converted-marker");
+  assert.ok(marker, "stattdessen der Verweis auf den vorhandenen Beleg");
+  assert.match(marker.textContent, /LS-2026-0003/);
+});
+
+test("Ohne Lieferschein bleibt der Knopf an der Rechnung", async () => {
+  const { window } = startApp({ routes: { "/api/invoices": [INVOICE_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const row = window.document.querySelector("#history-body tr");
+  assert.ok(row.querySelector("button[data-act=to-delivery]"));
+  assert.equal(row.querySelector(".converted-marker"), null);
+});
+
+test("Ein bereits umgewandelter Lieferschein bietet „zu Angebot“ nicht mehr an", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/delivery-notes": [
+        { id: 5, number: "LS-2026-0005", customer_name: "Alpha AG",
+          issue_date: "2026-02-01", status: "abgeschlossen", items: [],
+          converted_quote_number: "AN-2026-0005" },
+      ],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  const row = window.document.querySelector("#delivery-body tr");
+  assert.equal(row.querySelector("button[data-act=to-quote]"), null);
+  assert.match(row.querySelector(".converted-marker").textContent, /AN-2026-0005/);
+});
+
+test("Ein umgewandeltes Angebot zeigt die Rechnungsnummer statt des Knopfs", async () => {
+  const { window } = startApp({
+    quotes: [{ id: 1, number: "AN-2026-0001", customer_name: "Alpha AG",
+               issue_date: "2026-01-05", total: 500, status: "umgewandelt",
+               converted_invoice_number: "RE-2026-0001", items: [] }],
+  });
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+
+  const row = window.document.querySelector("#quotes-body tr");
+  assert.equal(row.querySelector("button[data-act=convert]"), null);
+  assert.match(row.querySelector(".converted-marker").textContent, /RE-2026-0001/);
+});
+
+test("Weist der Server die zweite Umwandlung ab, sagt die App das", async () => {
+  const { window } = startApp({
+    routes: { "/api/delivery-notes": [DN_OPEN_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  // Der Knopf ist da (der Server kennt die Dublette, das Frontend hier nicht):
+  // die Fehlermeldung des Servers muss beim Benutzer ankommen.
+  const messages = [];
+  window.alert = (text) => messages.push(text);
+  window.fetch = async () => ({
+    ok: false, status: 400, headers: new Headers(), clone() { return this; },
+    json: async () => ({ detail: "Aus diesem Lieferschein wurde bereits das Angebot AN-2026-0005 erstellt" }),
+  });
+
+  window.document.querySelector("#delivery-body button[data-act=to-quote]").click();
+  await settle(50);
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /AN-2026-0005/);
+  assert.equal(window.document.querySelector("#view-quotes").hidden, true,
+               "und es wird nicht in die Angebotsansicht gewechselt");
+});
+
 // -------------------------------- Beispieldatei: CSV oder JSON
 /**
  * Fängt die Downloads eines Fensters ab. jsdom kennt weder

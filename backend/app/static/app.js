@@ -685,7 +685,11 @@ function renderHistory() {
         <button class="link" data-act="email" data-id="${inv.id}" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${inv.status !== "storniert" ? `<button class="link" data-act="edit" data-id="${inv.id}" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
         ${inv.status !== "storniert" && inv.remaining > 0 ? `<button class="link" data-act="pay" data-id="${inv.id}" title="Zahlung erfassen">💶 <span>Zahlung</span></button>` : ""}
-        ${inv.status !== "storniert" ? `<button class="link" data-act="to-delivery" data-id="${inv.id}" title="In Lieferschein umwandeln">📦 <span>Lieferschein</span></button>` : ""}
+        ${inv.delivery_note_number
+          ? convertedMarker("📦", inv.delivery_note_number)
+          : inv.status !== "storniert"
+            ? `<button class="link" data-act="to-delivery" data-id="${inv.id}" title="In Lieferschein umwandeln">📦 <span>Lieferschein</span></button>`
+            : ""}
         ${inv.is_overdue ? `<button class="warn" data-act="remind" data-id="${inv.id}" title="Zahlungserinnerung senden">🔔 <span>Mahnen</span></button>` : ""}
         ${inv.status === "storniert"
           ? `<button class="link" data-act="reopen" data-id="${inv.id}" title="Storno rückgängig">↩️ <span>zurück</span></button>`
@@ -1295,6 +1299,16 @@ async function loadQuotes() {
   renderQuotes();
 }
 
+/**
+ * Marker statt Umwandeln-Knopf: aus diesem Beleg ist bereits ein anderer
+ * entstanden. Die API lehnt eine zweite Umwandlung ohnehin ab – hier steht
+ * nur, welcher Beleg schon existiert.
+ */
+function convertedMarker(icon, number) {
+  return `<span class="converted-marker" title="Bereits umgewandelt – eine zweite `
+       + `Umwandlung würde den Beleg doppeln">${icon} ${esc(number)}</span>`;
+}
+
 function renderQuotes() {
   const q0 = $("#quote-search").value.trim().toLowerCase();
   const status = $("#quote-filter-status").value;
@@ -1320,7 +1334,9 @@ function renderQuotes() {
         ${q.status === "offen" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
         ${q.status === "offen" ? `<button class="link" data-act="accept" title="Als angenommen markieren">✅ <span>annehmen</span></button>` : ""}
         ${q.status === "offen" ? `<button class="warn" data-act="decline" title="Als abgelehnt markieren">🚫 <span>ablehnen</span></button>` : ""}
-        ${q.status !== "umgewandelt" ? `<button class="link" data-act="convert" title="In Rechnung umwandeln">🧾 <span>zu Rechnung</span></button>` : ""}
+        ${q.status === "umgewandelt" || q.converted_invoice_number
+          ? convertedMarker("🧾", q.converted_invoice_number || "umgewandelt")
+          : `<button class="link" data-act="convert" title="In Rechnung umwandeln">🧾 <span>zu Rechnung</span></button>`}
         <button class="danger" data-act="delete" title="Angebot löschen">🗑️ <span>löschen</span></button>
       </td>`;
     tr.querySelectorAll("button[data-act]").forEach((btn) => {
@@ -1503,7 +1519,11 @@ function renderDeliveryNotes() {
            title="PDF herunterladen – der Lieferschein gilt danach als abgeschlossen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${d.status !== "storniert" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
-        ${d.status !== "storniert" ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>` : ""}
+        ${d.converted_quote_number
+          ? convertedMarker("📄", d.converted_quote_number)
+          : d.status !== "storniert"
+            ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>`
+            : ""}
         ${d.status === "offen"
           ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
           : `<button class="link" data-act="reopen" title="Wieder auf offen setzen">↩️ <span>wieder öffnen</span></button>`}

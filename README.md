@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (161 Backend- + 51 Frontend-Tests) with CI are
+and an automated test suite (166 Backend- + 56 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -73,6 +73,13 @@ code and `TODO.md` first.
   Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot"): Menge
   und Beschreibung kommen aus der Lieferung, die Preise – soweit die Position im
   Artikelstamm steht – aus den Standardpreisen, sonst 0 zum Nachtragen.
+- **Keine doppelten Umwandlungen** — jeder Beleg lässt sich nur einmal
+  umwandeln: aus einem Angebot entsteht genau eine Rechnung, aus einer
+  Rechnung genau ein Lieferschein, aus einem Lieferschein genau ein Angebot.
+  Gibt es den Folgebeleg schon, steht in der Liste statt des Knopfes dessen
+  Nummer (z. B. `📦 LS-2026-0007`), und die API weist einen zweiten Versuch
+  mit einem Hinweis auf den vorhandenen Beleg ab. Wird der Folgebeleg
+  gelöscht, ist die Umwandlung wieder möglich.
 - Angebote, Rechnungen und Lieferscheine teilen sich **eine fortlaufende
   Belegnummer pro Jahr**, damit eine Umwandlung die Nummer sauber weiterschiebt.
 
@@ -303,7 +310,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/invoices/{id}/pdf` | PDF herunterladen |
 | `POST`  | `/api/invoices/{id}/email` | Rechnung als PDF per E-Mail senden |
 | `POST`  | `/api/invoices/{id}/reminder` | Zahlungserinnerung (Mahnung) per E-Mail |
-| `POST`  | `/api/invoices/{id}/convert-to-delivery-note` | In Lieferschein umwandeln |
+| `POST`  | `/api/invoices/{id}/convert-to-delivery-note` | In Lieferschein umwandeln (nur einmal) |
 | `GET`   | `/api/export?month=JJJJ-MM` | Alle Rechnungen eines Monats als ZIP |
 
 ### Angebote
@@ -317,7 +324,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `DELETE`| `/api/quotes/{id}` | Löschen |
 | `GET`   | `/api/quotes/{id}/pdf` | PDF herunterladen |
 | `POST`  | `/api/quotes/{id}/email` | Per E-Mail senden |
-| `POST`  | `/api/quotes/{id}/convert` | In Rechnung umwandeln |
+| `POST`  | `/api/quotes/{id}/convert` | In Rechnung umwandeln (nur einmal) |
 
 ### Lieferscheine
 | Methode | Pfad | Zweck |
@@ -330,7 +337,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
 | `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen (setzt *offen* → *abgeschlossen*) |
 | `POST`  | `/api/delivery-notes/{id}/email` | Per E-Mail senden |
-| `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln |
+| `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln (nur einmal) |
 
 ### Kunden, Artikel, Dashboard, Einstellungen
 | Methode | Pfad | Zweck |

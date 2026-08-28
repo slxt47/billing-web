@@ -72,6 +72,7 @@ class InvoiceOut(BaseModel):
     skonto_date: Optional[date]
     locked_by: Optional[str] = None
     locked_at: Optional[datetime] = None
+    delivery_note_number: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -239,6 +240,8 @@ class QuoteOut(BaseModel):
     status: str
     created_at: datetime
     converted_invoice_id: Optional[int]
+    converted_invoice_number: Optional[str] = None
+    source_delivery_note_id: Optional[int] = None
     items: list[QuoteItemOut]
     subtotal: float
     discount_amount: float
@@ -308,6 +311,7 @@ class DeliveryNoteOut(BaseModel):
     status: str
     created_at: datetime
     source_invoice_id: Optional[int]
+    converted_quote_number: Optional[str] = None
     items: list[DeliveryNoteItemOut]
 
     class Config:

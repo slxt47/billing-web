@@ -746,8 +746,11 @@ def convert_quote(quote_id: int, db: Session = Depends(get_db)):
     quote = crud.get_quote(db, quote_id)
     if not quote:
         raise HTTPException(404, "Angebot nicht gefunden")
-    if quote.status == models.QUOTE_CONVERTED:
-        raise HTTPException(400, "Angebot wurde bereits umgewandelt")
+    if quote.status == models.QUOTE_CONVERTED or quote.converted_invoice_id:
+        # Kein zweites Mal: sonst stünden zwei Rechnungen über dieselbe Leistung.
+        target = quote.converted_invoice_number
+        raise HTTPException(400, "Angebot wurde bereits umgewandelt"
+                                 + (f" (Rechnung {target})" if target else ""))
     return crud.convert_quote_to_invoice(db, quote)
 
 
@@ -841,6 +844,9 @@ def convert_delivery_note(dn_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Lieferschein nicht gefunden")
     if dn.status == models.DN_CANCELLED:
         raise HTTPException(400, "Ein stornierter Lieferschein lässt sich nicht umwandeln")
+    if dn.converted_quote_number:
+        raise HTTPException(400, "Aus diesem Lieferschein wurde bereits das Angebot "
+                                 f"{dn.converted_quote_number} erstellt")
     return crud.convert_delivery_note_to_quote(db, dn)
 
 
@@ -850,6 +856,9 @@ def convert_invoice(invoice_id: int, db: Session = Depends(get_db)):
     invoice = crud.get_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(404, "Rechnung nicht gefunden")
+    if invoice.delivery_note_number:
+        raise HTTPException(400, "Zu dieser Rechnung gibt es bereits den Lieferschein "
+                                 f"{invoice.delivery_note_number}")
     return crud.convert_invoice_to_delivery_note(db, invoice)
 
 

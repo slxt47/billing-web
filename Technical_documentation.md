@@ -33,7 +33,7 @@ TECHNOLOGY STACK:
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 161 backend + 51 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 166 backend + 56 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -118,6 +118,19 @@ can carry the same running number forward with just the prefix changed
 (e.g. AN-2026-0007 -> RE-2026-0007 -> LS-2026-0007). Number assignment is
 serialized with a PostgreSQL advisory transaction lock
 (`pg_advisory_xact_lock`, fixed key) so concurrent users never collide.
+
+Each conversion may happen once. The link is a column on the target:
+`quotes.converted_invoice_id` (quote -> invoice), `delivery_notes
+.source_invoice_id` (invoice -> delivery note) and the new
+`quotes.source_delivery_note_id` (delivery note -> quote). The models expose
+the counterpart as `Invoice.delivery_note_number`,
+`DeliveryNote.converted_quote_number` and `Quote.converted_invoice_number`
+(relationships with `lazy="selectin"`, so a list costs one extra query, not
+one per row); the endpoints refuse a second conversion with 400 and name the
+existing document, and the three `*Out` schemas carry the number so the lists
+show it instead of the button. The relationships are the parent side, so
+deleting an invoice nullifies `source_invoice_id` on its delivery note
+instead of failing on the foreign key — and frees the conversion again.
 
 A delivery note has three states: `offen`, `abgeschlossen` and `storniert`
 (`models.DN_OPEN/DN_DONE/DN_CANCELLED`). `GET /api/delivery-notes/{id}/pdf`
@@ -327,7 +340,7 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 161 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 166 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
 invoice/quote/delivery-note lifecycles, customers and products, admin-only
 endpoints and the audit log, and the security layer itself (CSRF rejection,
@@ -339,7 +352,7 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 51 frontend tests that load the real
+`backend/tests/frontend/` holds 56 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the sample-file
 downloads (CSV/JSON), the post-save navigation into the invoice overview, the

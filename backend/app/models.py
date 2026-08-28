@@ -59,6 +59,21 @@ class Invoice(Base):
         order_by="InvoiceItem.id",
     )
 
+    # Lieferscheine, die aus dieser Rechnung entstanden sind. Gibt es einen,
+    # lehnt die API eine zweite Umwandlung ab (keine Dubletten). selectin
+    # statt lazy: eine Zusatzabfrage je Liste, nicht je Zeile.
+    delivery_notes = relationship(
+        "DeliveryNote",
+        back_populates="source_invoice",
+        order_by="DeliveryNote.id",
+        lazy="selectin",
+    )
+
+    @property
+    def delivery_note_number(self):
+        """Nummer des bereits erzeugten Lieferscheins, sonst None."""
+        return self.delivery_notes[0].number if self.delivery_notes else None
+
     # --- berechnete Werte -------------------------------------------------
     @property
     def subtotal(self):
@@ -264,6 +279,10 @@ class Quote(Base):
     status = Column(String(20), nullable=False, default=QUOTE_OPEN)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     converted_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    # Herkunft: aus diesem Lieferschein entstanden (verhindert, dass derselbe
+    # Lieferschein zweimal zu einem Angebot wird).
+    source_delivery_note_id = Column(Integer, ForeignKey("delivery_notes.id"),
+                                     nullable=True)
 
     items = relationship(
         "QuoteItem",
@@ -271,6 +290,16 @@ class Quote(Base):
         cascade="all, delete-orphan",
         order_by="QuoteItem.id",
     )
+
+    converted_invoice = relationship("Invoice", lazy="selectin")
+    source_delivery_note = relationship("DeliveryNote",
+                                        back_populates="converted_quotes",
+                                        lazy="selectin")
+
+    @property
+    def converted_invoice_number(self):
+        """Nummer der Rechnung, in die dieses Angebot umgewandelt wurde."""
+        return self.converted_invoice.number if self.converted_invoice else None
 
     @property
     def subtotal(self):
@@ -344,6 +373,19 @@ class DeliveryNote(Base):
         cascade="all, delete-orphan",
         order_by="DeliveryNoteItem.id",
     )
+
+    source_invoice = relationship("Invoice", back_populates="delivery_notes")
+    converted_quotes = relationship(
+        "Quote",
+        back_populates="source_delivery_note",
+        order_by="Quote.id",
+        lazy="selectin",
+    )
+
+    @property
+    def converted_quote_number(self):
+        """Nummer des bereits erzeugten Angebots, sonst None."""
+        return self.converted_quotes[0].number if self.converted_quotes else None
 
 
 class DeliveryNoteItem(Base):

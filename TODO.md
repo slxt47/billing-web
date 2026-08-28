@@ -95,16 +95,17 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
     einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
     und unbehandelte Fehler
-[X] Automatisierte Tests: 161 pytest-Tests in backend/tests/ gegen eine
+[X] Automatisierte Tests: 166 pytest-Tests in backend/tests/ gegen eine
     temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
     Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import), Admin-Endpunkte,
     Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 51 Frontend-Tests in backend/tests/frontend/, die die
+    backend/. Dazu 56 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
     Logo-Upload, Kundenimport, Beispieldateien als CSV/JSON, Listenfilter,
-    Lieferscheinliste, Umwandlung Angebot -> Rechnung, Sprung in die
-    Rechnungsübersicht nach dem Speichern, CSRF-Header, Maskierung) –
+    Lieferscheinliste, Umwandlung Angebot -> Rechnung, gesperrte
+    Doppelumwandlungen, Sprung in die Rechnungsübersicht nach dem Speichern,
+    CSRF-Header, Maskierung) –
     `npm install && npm test`, braucht Node >= 20
 
 
@@ -134,6 +135,15 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     stornierter bleibt storniert (main.download_delivery_note_pdf). „wieder
     öffnen“ setzt zurück auf offen, stornieren bleibt möglich, und der
     Statusfilter der Liste kennt den neuen Wert.
+[X] Jede Umwandlung nur einmal: aus einem Angebot entsteht genau eine
+    Rechnung, aus einer Rechnung genau ein Lieferschein, aus einem
+    Lieferschein genau ein Angebot. Verknüpft wird über
+    quotes.converted_invoice_id, delivery_notes.source_invoice_id und
+    quotes.source_delivery_note_id (neu, samt Migration); die API weist den
+    zweiten Versuch mit 400 ab und nennt den vorhandenen Beleg, die Listen
+    zeigen statt des Knopfes dessen Nummer (app.js: convertedMarker). Wird
+    der Folgebeleg gelöscht, ist die Umwandlung wieder möglich – das Löschen
+    einer Rechnung lässt ihren Lieferschein stehen und nullt nur den Verweis.
 [X] Gemeinsame, durchsuchbare Kundenauswahl in allen drei Formularen
     (app.js: registerCustomerPicker): nur aktive Kunden, die Auswahl füllt
     die Stammdaten. Die Suche wählt den besten Treffer vor, behält einen
@@ -272,6 +282,12 @@ Sonst ist hier nichts geparkt.
 --------------------------------------------------------------------------------
 10. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-28, fünfter Durchgang
+  * Umwandlungen lassen sich nicht mehr doppeln (Abschnitt 3): die API
+    lehnt den zweiten Versuch ab und nennt den vorhandenen Beleg, die Listen
+    zeigen dort dessen Nummer statt des Knopfes.
+  * Teststand: 166 Backend- und 56 Frontend-Tests.
+
 2026-08-28, vierter Durchgang
   * Beispieldatei für den Kundenimport gibt es jetzt als CSV und als JSON,
     das Format wird in einem kleinen Fenster abgefragt (Abschnitt 4).

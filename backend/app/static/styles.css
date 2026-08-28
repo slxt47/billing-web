@@ -307,6 +307,18 @@ nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #
 :root[data-theme="light"] .badge.ueberfaellig { background: #ffe9e9; }
 :root[data-theme="light"] input[type="date"] { color-scheme: light; }
 
+/* Statt Umwandeln-Knopf: Verweis auf den Beleg, der schon daraus entstand. */
+.converted-marker {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 /* ===== Kleines Auswahlfenster (z. B. Beispieldatei: CSV oder JSON) ===== */
 .popover-anchor { position: relative; display: inline-block; }
 .popover {

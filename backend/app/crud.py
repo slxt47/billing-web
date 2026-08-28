@@ -862,6 +862,7 @@ def convert_delivery_note_to_quote(db: Session, dn: models.DeliveryNote) -> mode
         this_year = date.today().year
         number = f"AN-{this_year}-{_next_doc_suffix(db, this_year):04d}"
     quote = _build_quote(data, number)
+    quote.source_delivery_note_id = dn.id
     db.add(quote)
     try:
         db.commit()
