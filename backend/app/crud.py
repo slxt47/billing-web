@@ -2,7 +2,7 @@
 from calendar import monthrange
 from datetime import datetime, date, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -378,6 +378,47 @@ def create_customer(db: Session, data: schemas.CustomerIn) -> models.Customer:
 
 def get_customer(db: Session, customer_id: int) -> models.Customer | None:
     return db.get(models.Customer, customer_id)
+
+
+def get_customer_by_name(db: Session, name: str) -> models.Customer | None:
+    """Kunde anhand des Namens (ohne Rücksicht auf Groß-/Kleinschreibung) –
+    die Zuordnung beim CSV-Import, der keine IDs kennt."""
+    return (db.query(models.Customer)
+            .filter(func.lower(models.Customer.name) == name.strip().lower())
+            .first())
+
+
+def import_customers(db: Session, rows: list[schemas.CustomerIn]) -> tuple[int, int]:
+    """Kunden aus einem Import übernehmen: gleicher Name = aktualisieren,
+    sonst neu anlegen. Rückgabe: (angelegt, aktualisiert)."""
+    created = updated = 0
+    for data in rows:
+        existing = get_customer_by_name(db, data.name)
+        if existing:
+            existing.name = data.name
+            existing.address = data.address
+            existing.contact_person = data.contact_person
+            existing.email = data.email
+            existing.payment_term_days = data.payment_term_days
+            existing.skonto_percent = data.skonto_percent
+            existing.skonto_days = data.skonto_days
+            updated += 1
+        else:
+            db.add(models.Customer(
+                name=data.name,
+                address=data.address,
+                contact_person=data.contact_person,
+                email=data.email,
+                payment_term_days=data.payment_term_days,
+                skonto_percent=data.skonto_percent,
+                skonto_days=data.skonto_days,
+            ))
+            # Ohne Flush fände eine Datei mit zwei gleichen Namen den eben
+            # angelegten Kunden nicht (die Session flusht nicht automatisch).
+            db.flush()
+            created += 1
+    db.commit()
+    return created, updated
 
 
 def update_customer(db: Session, customer: models.Customer,

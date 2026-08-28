@@ -15,7 +15,7 @@
       <button id="nav-new">Neue Rechnung</button>
       <button id="nav-quotes">Angebote</button>
       <button id="nav-delivery">Lieferscheine</button>
-      <button id="nav-history">History</button>
+      <button id="nav-history">Rechnungsübersicht</button>
       <button id="nav-customers">Kunden</button>
       <button id="nav-products">Artikel</button>
       <button id="nav-settings" hidden>Firma</button>
@@ -40,11 +40,21 @@
     <!-- ============ NEUE RECHNUNG / BEARBEITEN ============ -->
     <section id="view-new" hidden>
       <h2 id="invoice-form-title">Neue Rechnung erstellen</h2>
-      <p id="lock-banner" class="warn-banner" hidden></p>
-      <p id="invoice-presence" class="presence-banner" hidden></p>
+      <p id="lock-banner" class="warn-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#lock-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
+      <p id="invoice-presence" class="presence-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#invoice-presence"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
       <p class="draft-banner" id="invoice-draft-banner" hidden>
         <span class="draft-text"></span>
         <button type="button" class="link" data-discard-draft="invoice">Entwurf verwerfen</button>
+        <button type="button" class="banner-close" data-hide-banner="#invoice-draft-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
       </p>
       <form id="invoice-form">
         <input type="hidden" name="invoice_id" value="">
@@ -123,10 +133,16 @@
     <!-- ============ ANGEBOTE ============ -->
     <section id="view-quotes" hidden>
       <h2 id="quote-form-title">Neues Angebot erstellen</h2>
-      <p id="quote-presence" class="presence-banner" hidden></p>
+      <p id="quote-presence" class="presence-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#quote-presence"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
       <p class="draft-banner" id="quote-draft-banner" hidden>
         <span class="draft-text"></span>
         <button type="button" class="link" data-discard-draft="quote">Entwurf verwerfen</button>
+        <button type="button" class="banner-close" data-hide-banner="#quote-draft-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
       </p>
       <form id="quote-form">
         <input type="hidden" name="quote_id" value="">
@@ -194,12 +210,14 @@
           <option value="umgewandelt">umgewandelt</option>
         </select>
       </div>
-      <table id="quotes-table">
-        <thead>
-          <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th class="col-num">Betrag</th><th>Status</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="quotes-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="quotes-table">
+          <thead>
+            <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th class="col-num">Betrag</th><th>Status</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="quotes-body"></tbody>
+        </table>
+      </div>
       <p id="quotes-empty" hidden>Noch keine Angebote erstellt.</p>
       <p id="quotes-nomatch" hidden>Keine Angebote passen zur Suche.</p>
     </section>
@@ -207,10 +225,16 @@
     <!-- ============ LIEFERSCHEINE ============ -->
     <section id="view-delivery" hidden>
       <h2 id="delivery-form-title">Neuen Lieferschein erstellen</h2>
-      <p id="delivery-presence" class="presence-banner" hidden></p>
+      <p id="delivery-presence" class="presence-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#delivery-presence"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
       <p class="draft-banner" id="delivery-draft-banner" hidden>
         <span class="draft-text"></span>
         <button type="button" class="link" data-discard-draft="delivery">Entwurf verwerfen</button>
+        <button type="button" class="banner-close" data-hide-banner="#delivery-draft-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
       </p>
       <form id="delivery-form">
         <input type="hidden" name="delivery_id" value="">
@@ -264,19 +288,21 @@
           <option value="storniert">storniert</option>
         </select>
       </div>
-      <table id="delivery-table">
-        <thead>
-          <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="delivery-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="delivery-table">
+          <thead>
+            <tr><th>Nummer</th><th>Kunde</th><th>Datum</th><th>Status</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="delivery-body"></tbody>
+        </table>
+      </div>
       <p id="delivery-empty" hidden>Noch keine Lieferscheine erstellt.</p>
       <p id="delivery-nomatch" hidden>Keine Lieferscheine passen zur Suche.</p>
     </section>
 
-    <!-- ============ HISTORY ============ -->
+    <!-- ============ RECHNUNGSÜBERSICHT (ehem. "History") ============ -->
     <section id="view-history" hidden>
-      <h2>History</h2>
+      <h2>Rechnungsübersicht</h2>
       <div class="bar">
         <input type="search" id="search" placeholder="Suche nach Nummer oder Kunde…">
         <select id="filter-status">
@@ -292,20 +318,22 @@
           <button id="export-btn" class="secondary">⬇️ Monat exportieren (ZIP)</button>
         </span>
       </div>
-      <table id="history-table">
-        <thead>
-          <tr>
-            <th data-sort="number">Nummer</th>
-            <th data-sort="customer_name">Kunde</th>
-            <th data-sort="issue_date">Datum</th>
-            <th data-sort="total" class="col-num">Betrag</th>
-            <th data-sort="remaining" class="col-num">Offen</th>
-            <th data-sort="status">Status</th>
-            <th>Aktionen</th>
-          </tr>
-        </thead>
-        <tbody id="history-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th data-sort="number">Nummer</th>
+              <th data-sort="customer_name">Kunde</th>
+              <th data-sort="issue_date">Datum</th>
+              <th data-sort="total" class="col-num">Betrag</th>
+              <th data-sort="remaining" class="col-num">Offen</th>
+              <th data-sort="status">Status</th>
+              <th>Aktionen</th>
+            </tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
       <p id="history-empty" hidden>Keine Rechnungen gefunden.</p>
     </section>
 
@@ -342,6 +370,20 @@
         <span id="customer-msg"></span>
       </form>
 
+      <h3>Kunden importieren</h3>
+      <p class="hint">CSV-Datei mit einer Kopfzeile; nötig ist nur eine Spalte
+        <code>Name</code>. Erkannt werden außerdem <code>E-Mail</code>,
+        <code>Ansprechpartner</code>, <code>Anschrift</code>,
+        <code>Zahlungsfrist</code>, <code>Skonto</code> und <code>Skonto_Tage</code>
+        (Trennzeichen <code>;</code> oder <code>,</code>). Ein bereits vorhandener
+        Kunde mit demselben Namen wird aktualisiert statt doppelt angelegt.</p>
+      <div class="bar">
+        <input type="file" id="customer-import-file" class="grow" accept=".csv,text/csv">
+        <button type="button" id="customer-import-btn" class="secondary">⬆️ Importieren</button>
+        <button type="button" id="customer-import-example" class="secondary">📄 Beispieldatei</button>
+      </div>
+      <p id="customer-import-msg" class="hint"></p>
+
       <h3>Gespeicherte Kunden</h3>
       <div class="bar">
         <input type="search" id="customer-list-search" class="grow"
@@ -352,12 +394,14 @@
           <option value="0">nur inaktive</option>
         </select>
       </div>
-      <table id="customers-table">
-        <thead>
-          <tr><th>Name</th><th>E-Mail</th><th>Ansprechpartner</th><th>Anschrift</th><th>Zahlungsfrist</th><th>Skonto</th><th>Status</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="customers-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="customers-table">
+          <thead>
+            <tr><th>Name</th><th>E-Mail</th><th>Ansprechpartner</th><th>Anschrift</th><th>Zahlungsfrist</th><th>Skonto</th><th>Status</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="customers-body"></tbody>
+        </table>
+      </div>
       <p id="customers-empty" hidden>Noch keine Kunden gespeichert.</p>
       <p id="customers-nomatch" hidden>Keine Kunden passen zur Suche.</p>
     </section>
@@ -391,12 +435,14 @@
           <option value="0">nur inaktive</option>
         </select>
       </div>
-      <table id="products-table">
-        <thead>
-          <tr><th>Bezeichnung</th><th>Standardpreis</th><th>Status</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="products-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="products-table">
+          <thead>
+            <tr><th>Bezeichnung</th><th>Standardpreis</th><th>Status</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="products-body"></tbody>
+        </table>
+      </div>
       <p id="products-empty" hidden>Noch keine Artikel gespeichert.</p>
       <p id="products-nomatch" hidden>Keine Artikel passen zur Suche.</p>
     </section>
@@ -470,12 +516,14 @@
       <div class="bar">
         <input type="search" id="user-search" class="grow" placeholder="Benutzer suchen…">
       </div>
-      <table id="users-table">
-        <thead>
-          <tr><th>Benutzername</th><th>Rolle</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="users-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="users-table">
+          <thead>
+            <tr><th>Benutzername</th><th>Rolle</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ============ AUDIT-LOG (nur Admin, DSGVO) ============ -->
@@ -487,12 +535,14 @@
         <input type="search" id="audit-search" class="grow"
                placeholder="Suche nach Benutzer, Aktion, Ziel oder Details…">
       </div>
-      <table id="audit-table">
-        <thead>
-          <tr><th>Zeitpunkt</th><th>Benutzer</th><th>Aktion</th><th>Ziel</th><th>Details</th></tr>
-        </thead>
-        <tbody id="audit-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="audit-table">
+          <thead>
+            <tr><th>Zeitpunkt</th><th>Benutzer</th><th>Aktion</th><th>Ziel</th><th>Details</th></tr>
+          </thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ============ BACKUP (nur Admin) ============ -->
@@ -502,12 +552,14 @@
         (die letzten 14 Tage werden aufbewahrt, siehe <code>./backups</code>).
         Hier kannst du ein Backup herunterladen oder den aktuellen
         Datenbankstand damit überschreiben.</p>
-      <table id="backup-table">
-        <thead>
-          <tr><th>Datei</th><th>Erstellt</th><th class="col-num">Größe</th><th>Aktionen</th></tr>
-        </thead>
-        <tbody id="backup-body"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table id="backup-table">
+          <thead>
+            <tr><th>Datei</th><th>Erstellt</th><th class="col-num">Größe</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="backup-body"></tbody>
+        </table>
+      </div>
       <p id="backup-empty" hidden>Noch keine Backups vorhanden.</p>
     </section>
   </main>

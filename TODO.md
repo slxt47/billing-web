@@ -17,6 +17,13 @@ were updated to match. It also delivered the four [FEATURE REQUEST] items at
 the bottom of this file and both entries from the former IDEAS section (live
 presence indicator, payment-confirmation alignment).
 
+The 2026-08-28 pass worked through the NEW IDEAS block at the bottom of this
+file: the logo upload no longer wipes unsaved company data, the customer list
+no longer runs past the edge of the card, customers can be imported from CSV,
+"History" is now "Rechnungsübersicht", the lock/presence/restored-draft
+banners can be dismissed, and a customer search now preselects its best hit.
+Test counts are up to 147 backend + 36 frontend tests.
+
 [SECURITY & PRODUCTION]
 [X] PBKDF2 password hashing (200k iterations, per-user salt)
 [X] Login brute-force lockout (5 failed attempts -> 5 min lock, per IP+user)
@@ -67,13 +74,14 @@ presence indicator, payment-confirmation alignment).
 [X] Discount (%) and Kleinunternehmer / §19 UStG mode (no VAT)
 [X] Skonto (early-payment discount) calculation and PDF display
 [X] Idempotent schema migrations on startup (ADD COLUMN IF NOT EXISTS)
-[X] Automated test suite: 139 pytest tests in backend/tests/ against a
+[X] Automated test suite: 147 pytest tests in backend/tests/ against a
     temporary SQLite DB (conftest.py) — invoices, quotes, delivery notes,
-    customers/products, admin endpoints, audit log and the security layer.
-    Run with `python -m pytest` in backend/. Plus 27 frontend tests in
-    backend/tests/frontend/ that drive the real index.html + app.js in jsdom
-    (customer picker, draft cache, list filters, CSRF header, escaping) —
-    `npm install && npm test`, needs Node >= 20.
+    customers/products (incl. the CSV import), admin endpoints, audit log and
+    the security layer. Run with `python -m pytest` in backend/. Plus 36
+    frontend tests in backend/tests/frontend/ that drive the real index.html +
+    app.js in jsdom (customer picker incl. best-match preselection, draft
+    cache, dismissible banners, logo upload, customer import, list filters,
+    CSRF header, escaping) — `npm install && npm test`, needs Node >= 20.
 [X] Centralized/structured error handling & logging (logging_setup.py):
     JSON log lines, per-request X-Request-ID carried into every line and
     every error body, uniform {"detail", "request_id"} responses for HTTP,
@@ -106,12 +114,18 @@ presence indicator, payment-confirmation alignment).
 [ ] Customer groups
 [ ] Credit limits
 [ ] Customer notes field
-[ ] CSV import/export of customers/products (DSGVO export is JSON, per
-    customer, not a bulk CSV feature)
+[X] CSV import of customers (POST /api/customers/import, "Kunden
+    importieren" in the customer view): header row mapped against German and
+    English column names, `;`/`,`/tab delimiter, UTF-8 or Windows-1252,
+    existing customers matched by name are updated instead of duplicated,
+    bad rows skipped and reported. Template via "Beispieldatei".
+[ ] CSV import for products, and CSV export for both (the DSGVO export is
+    JSON, per customer, not a bulk CSV feature)
 
 [REPORTING]
 [X] Dashboard KPIs (revenue, open amount, overdue amount, 6-month chart)
-[X] History filtering (status/overdue) and column sorting
+[X] History filtering (status/overdue) and column sorting — the tab is now
+    called "Rechnungsübersicht" (the view id `view-history` stayed)
 [ ] Advanced/custom report builder
 [ ] Dedicated tax report / VAT return export
 [ ] Profit & loss reporting
@@ -175,12 +189,13 @@ presence indicator, payment-confirmation alignment).
 
 
 ---------------------------------------------------------------------------
-STILL OPEN (unchanged by the 2026-08-27 pass)
+STILL OPEN (unchanged by the 2026-08-27 and 2026-08-28 passes)
 ---------------------------------------------------------------------------
 The remaining [ ] items are real product/infrastructure work, not oversights:
 recurring invoices, approval workflow, credit notes as their own document
 type, multi-currency, custom PDF templates, document attachments, customer
-groups, credit limits, customer notes, CSV import/export, a custom report
+groups, credit limits, customer notes, CSV for products (customers can be
+imported since 2026-08-28) and CSV export, a custom report
 builder, a VAT-return export, P&L reporting, monitoring, a response cache,
 horizontal scaling (needs shared state for the login lockout and the
 rate-limit counters), an external pen test, and diagrams beyond the ASCII
@@ -206,3 +221,27 @@ lists above:
     payment or flips the status to "bezahlt".
 
 Nothing else is currently parked here. New ideas go below this line.
+
+
+NEW IDEAS (all done on 2026-08-28):
+[X] Uploading a logo wiped every field under "Firmendaten": the upload handler
+    called loadSettings(), which re-filled the form from the server and threw
+    away whatever was typed but not yet saved. It now only refreshes the
+    preview (app.js: showLogo).
+[X] The customer list ran past the edge of the card: the wide lists sit in a
+    `.table-scroll` container now (own horizontal scrollbar, the page itself
+    never scrolls sideways) and the address column wraps (`.cell-wrap`).
+[X] Customer import: CSV upload in the "Kunden" view, see the
+    [CUSTOMER & PRODUCT MANAGEMENT] section above.
+[X] "History" is now called "Rechnungsübersicht" (label only; ids, routes and
+    the server-side search are unchanged).
+[X] The hints above the invoice/quote/delivery-note forms — edit lock,
+    "someone else is here" and "restored draft" — each have a "✕" now.
+    Hiding a draft hint does NOT discard the draft; a hidden banner comes
+    back as soon as it has something new to say (app.js: showBanner /
+    hideBanner / dismissedBanners).
+[X] Searching for a customer now preselects the best hit instead of leaving
+    "– neuen Kunden eingeben –" selected, and fills the master data from it.
+    An already-picked customer that still matches the search is kept, and the
+    data is only re-applied when the best hit actually changes, so typing on
+    does not overwrite fields edited by hand.

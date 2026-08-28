@@ -80,7 +80,7 @@ function addFormNamedAccess(window) {
 
 /** Startet die App in einem frischen jsdom-Fenster. */
 function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
-                    presence = [], others = [] } = {}) {
+                    presence = [], others = [], routes = {} } = {}) {
   const dom = new JSDOM(HTML, { url: "https://rechnungen.localhost/",
                                 runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
@@ -112,6 +112,7 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
       "/api/users": [{ id: 1, username: "admin", is_admin: true }],
       "/api/audit-log": [],
       "/api/admin/backups": [],
+      ...routes,
     };
     if (/^\/api\/presence\/[a-z_]+\/\d+$/.test(path)) {
       return response({ others });
@@ -122,6 +123,15 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
   addFormNamedAccess(window);
   window.eval(APP_JS);
   return { window, requests };
+}
+
+/** Legt eine Datei in ein <input type="file"> (jsdom kennt keinen Dialog). */
+function pickFile(window, selector, name, type) {
+  const input = window.document.querySelector(selector);
+  const file = new window.File(["xxx"], name, { type });
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  fire(input, "change");
+  return input;
 }
 
 /** Wartet, bis die beim Start ausgelösten fetch-Ketten durchgelaufen sind. */
@@ -575,4 +585,152 @@ test("Ohne Anwesende bleibt die Liste unmarkiert", async () => {
   window.document.querySelector("#nav-quotes").click();
   await settle();
   assert.equal(window.document.querySelectorAll("#quotes-body .presence-dot").length, 0);
+});
+
+// -------------------------------- Bester Suchtreffer (NEUE IDEEN)
+test("Die Suche wählt den besten Treffer gleich aus", async () => {
+  const { window } = startApp();
+  await settle();
+
+  const search = window.document.querySelector("#quote-customer-search");
+  search.value = "beta";
+  fire(search);
+
+  assert.equal(window.document.querySelector("#quote-customer-select").value, "2");
+  assert.equal(window.document.querySelector("#quote-form").customer_name.value, "Beta GmbH");
+});
+
+test("Der exakte Name schlägt den zufälligen Teiltreffer", async () => {
+  const { window } = startApp({
+    customers: [
+      { id: 7, name: "Alpha Bauunternehmung", address: "", contact_person: "",
+        email: "", payment_term_days: 14, skonto_percent: 0, skonto_days: 0, active: true },
+      { id: 8, name: "Alpha", address: "", contact_person: "", email: "",
+        payment_term_days: 14, skonto_percent: 0, skonto_days: 0, active: true },
+    ],
+  });
+  await settle();
+
+  const search = window.document.querySelector("#customer-search");
+  search.value = "alpha";
+  fire(search);
+  assert.equal(window.document.querySelector("#customer-select").value, "8");
+});
+
+test("Ohne Treffer bleibt es bei „neuen Kunden eingeben“", async () => {
+  const { window } = startApp();
+  await settle();
+  const search = window.document.querySelector("#quote-customer-search");
+  search.value = "gibtesnicht";
+  fire(search);
+  assert.equal(window.document.querySelector("#quote-customer-select").value, "");
+  assert.equal(window.document.querySelector("#quote-form").customer_name.value, "");
+});
+
+test("Eine getroffene Auswahl wird von der Suche nicht überschrieben", async () => {
+  const { window } = startApp();
+  await settle();
+  const select = window.document.querySelector("#quote-customer-select");
+  select.value = "1";
+  fire(select, "change");
+
+  const search = window.document.querySelector("#quote-customer-search");
+  search.value = "a";                  // passt auf beide Kunden
+  fire(search);
+
+  assert.equal(select.value, "1");
+  assert.equal(window.document.querySelector("#quote-form").customer_name.value, "Alpha AG");
+});
+
+// -------------------------------- Hinweise ausblenden (NEUE IDEEN)
+test("Der Anwesenheits-Hinweis lässt sich wegklicken", async () => {
+  const { window } = startApp({ others: [{ username: "anna", last_seen: "x" }] });
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+  window.document.querySelectorAll("#quotes-body button[data-act=edit]")[0].click();
+  await settle(50);
+
+  const banner = window.document.querySelector("#quote-presence");
+  assert.equal(banner.hidden, false);
+
+  banner.querySelector(".banner-close").click();
+  assert.equal(banner.hidden, true);
+
+  await settle(50);                    // der nächste Heartbeat holt ihn nicht zurück
+  assert.equal(banner.hidden, true);
+});
+
+test("Der Hinweis auf einen wiederhergestellten Entwurf lässt sich ausblenden, ohne ihn zu verwerfen", async () => {
+  const draft = JSON.stringify({
+    quote: { saved_at: Date.now(), data: { fields: { customer_name: "Wieder AG" }, items: [] } },
+  });
+  const { window } = startApp({ storage: { "rechnung.drafts.v1": draft } });
+  await settle();
+
+  const banner = window.document.querySelector("#quote-draft-banner");
+  assert.equal(banner.hidden, false);
+
+  banner.querySelector(".banner-close").click();
+  assert.equal(banner.hidden, true);
+  assert.match(window.localStorage.getItem("rechnung.drafts.v1"), /Wieder AG/,
+               "ausblenden ist kein verwerfen");
+  assert.equal(window.document.querySelector("#quote-form").customer_name.value, "Wieder AG");
+});
+
+// -------------------------------- Firmendaten & Logo (NEUE IDEEN)
+test("Ein Logo-Upload löscht die eingetippten Firmendaten nicht", async () => {
+  const { window, requests } = startApp();
+  await settle();
+  window.document.querySelector("#nav-settings").click();
+  await settle();
+
+  const form = window.document.querySelector("#settings-form");
+  form.company_name.value = "Neue Firma GmbH";
+  form.iban.value = "DE02120300000000202051";
+
+  pickFile(window, "#logo-input", "logo.png", "image/png");
+  await settle(50);
+
+  assert.ok(requests.find((r) => r.url === "/api/settings/logo" && r.options.method === "POST"));
+  assert.equal(form.company_name.value, "Neue Firma GmbH");
+  assert.equal(form.iban.value, "DE02120300000000202051");
+  assert.equal(window.document.querySelector("#logo-preview").hidden, false);
+});
+
+// -------------------------------- Kunden-Import (NEUE IDEEN)
+test("Der Kunden-Import schickt die Datei und meldet das Ergebnis", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/customers/import": { created: 2, updated: 1, skipped: 0, errors: [] } },
+  });
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+
+  pickFile(window, "#customer-import-file", "kunden.csv", "text/csv");
+  window.document.querySelector("#customer-import-btn").click();
+  await settle(50);
+
+  const upload = requests.find((r) => r.url === "/api/customers/import");
+  assert.ok(upload, "POST /api/customers/import");
+  assert.equal(upload.options.method, "POST");
+  assert.equal(upload.options.headers.get("X-CSRF-Token"), "token-aus-dem-cookie");
+
+  const msg = window.document.querySelector("#customer-import-msg").textContent;
+  assert.match(msg, /2 neu angelegt/);
+  assert.match(msg, /1 aktualisiert/);
+});
+
+test("Ohne ausgewählte Datei wird nichts hochgeladen", async () => {
+  const { window, requests } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+
+  window.document.querySelector("#customer-import-btn").click();
+  await settle(20);
+
+  assert.ok(!requests.some((r) => r.url === "/api/customers/import"));
+  assert.match(window.document.querySelector("#customer-import-msg").textContent,
+               /CSV-Datei auswählen/);
 });

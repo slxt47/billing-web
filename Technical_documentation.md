@@ -159,6 +159,20 @@ exposed under `/api/*`. Authentication endpoints (`/login`, `/logout`) and
 the SPA/static assets (`/`, `/static/*`, `/datenschutz`, `/health`) are
 outside `/api`.
 
+CUSTOMER CSV IMPORT (`POST /api/customers/import`, multipart field `file`):
+Parsing lives in `main.py` (`_csv_text`, `_csv_reader`, `_csv_field_map`,
+`_csv_number`), writing in `crud.import_customers()`. The header row is
+mapped against `CSV_COLUMNS`, which lists German and English spellings per
+field; a name column is the only requirement, everything else falls back to
+the `CustomerIn` defaults. The delimiter (`;`, `,` or tab) is taken from the
+header line, the file is decoded as UTF-8 (BOM tolerated) or Windows-1252 for
+Excel exports, and `12,5` is read as `12.5`. Rows are matched to existing
+customers by name, case-insensitively (`crud.get_customer_by_name`), so a
+re-import updates instead of duplicating; a row without a name or with values
+`CustomerIn` rejects is skipped and reported in `errors` rather than failing
+the whole file. Caps: 1 MB, 5,000 rows, 20 reported errors. Every import is
+written to the audit log.
+
 SECURITY:
 - Password hashing: PBKDF2-HMAC-SHA256, 200,000 iterations, random 16-byte
   salt per user (backend/app/auth.py, stdlib only).
@@ -257,12 +271,23 @@ worth knowing about:
   input with a `<select>`. `registerCustomerPicker()` wires them up and
   `fillPicker()` re-renders the options from `customersCache`, matching on
   name, contact person, email and address; only active customers are offered.
-  A `pending` value lets a restored draft re-select a customer before the
-  customer list has finished loading.
+  A search with hits selects and applies its best match right away
+  (`bestMatch()`/`matchScore()`: exact name > name prefix > prefix of contact
+  person/email/address > substring, shorter name wins a tie) instead of
+  leaving the placeholder selected. A selection that still matches the search
+  is kept, and a customer is applied only when the best match actually
+  changes, so typing on does not overwrite hand-edited fields. A `pending`
+  value lets a restored draft re-select a customer before the customer list
+  has finished loading.
+- Banners above the three document forms (edit lock, presence, restored
+  draft) go through `showBanner()`/`hideBanner()`. Each carries a "✕" that
+  files its current text in `dismissedBanners`, so the banner stays away until
+  it has something new to say — hiding the draft hint is not the same as
+  discarding the draft.
 - Draft cache: unsent input in the three document forms is written to
   `localStorage` under `rechnung.drafts.v1` (debounced 400 ms, plus a flush on
-  `beforeunload`) and restored on the next load, with a banner and a "discard"
-  button. Drafts are per-browser, never sent to the server, skipped entirely
+  `beforeunload`) and restored on the next load, with a banner offering both
+  "discard" and "hide". Drafts are per-browser, never sent to the server, skipped entirely
   while editing an existing document (the server state and the edit lock win
   there), dropped after a successful save, and expire after 7 days.
 - List filtering happens client-side over the already-loaded cache for quotes,
@@ -277,7 +302,7 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 139 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 147 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
 invoice/quote/delivery-note lifecycles, customers and products, admin-only
 endpoints and the audit log, and the security layer itself (CSRF rejection,
@@ -289,7 +314,7 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 27 frontend tests that load the real
+`backend/tests/frontend/` holds 36 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the CSRF header and
 the HTML escaping (`npm install && npm test`, needs Node >= 20).

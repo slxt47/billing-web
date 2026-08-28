@@ -1,7 +1,7 @@
 # 🧾 Rechnungs-App
 
 Eine Web-Applikation zum Schreiben von Rechnungen, Angeboten und Lieferscheinen —
-komplett in Docker-Containern, mit PostgreSQL-Datenbank, History, PDF-Download,
+komplett in Docker-Containern, mit PostgreSQL-Datenbank, Rechnungsübersicht, PDF-Download,
 E-Mail-Versand und DSGVO-Funktionen.
 
 ## ⚠️ Project Status: Not Production Ready
@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (139 Backend- + 27 Frontend-Tests) with CI are
+and an automated test suite (147 Backend- + 36 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -73,8 +73,17 @@ code and `TODO.md` first.
   bearbeiten; beim Erstellen per Auswahl übernehmen (Preis wird gesetzt) oder
   weiterhin frei eintippen.
 - **Aktivieren/Deaktivieren** — Kunden und Artikel können statt gelöscht auch nur
-  deaktiviert werden (bleiben in der Auswahl ausgeblendet, History/alte Belege
-  bleiben unberührt).
+  deaktiviert werden (bleiben in der Auswahl ausgeblendet, Rechnungsübersicht/alte
+  Belege bleiben unberührt).
+- **Kunden-Import (CSV)** — eine bestehende Kundenliste lässt sich im Reiter
+  „Kunden“ als CSV-Datei einlesen (Pflichtspalte `Name`, optional E-Mail,
+  Ansprechpartner, Anschrift, Zahlungsfrist und Skonto; `;` oder `,` als
+  Trennzeichen, UTF-8 oder Windows-1252). Gleiche Namen werden aktualisiert
+  statt doppelt angelegt, fehlerhafte Zeilen einzeln gemeldet. Eine Vorlage
+  gibt es per Knopfdruck („Beispieldatei“).
+- **Kundensuche mit Vorauswahl** — wer im Beleg-Formular nach einem Kunden
+  sucht, bekommt den besten Treffer sofort ausgewählt und die Stammdaten
+  übernommen; eine bereits getroffene Auswahl bleibt dabei stehen.
 
 ### DSGVO
 - **Datenschutzerklärung** — öffentlich erreichbare Seite unter `/datenschutz`.
@@ -102,7 +111,8 @@ code and `TODO.md` first.
   zurückspielen (mit doppelter Sicherheitsabfrage, da destruktiv).
 - **Dashboard** — Kennzahlen (Umsatz, offen, überfällig) und ein Umsatz-Diagramm
   der letzten 6 Monate; ist die Startseite nach dem Login.
-- **History-Filter** — nach Status/überfällig filtern, nach Nummer/Kunde suchen und Spalten sortieren.
+- **Rechnungsübersicht** (früher „History“) — nach Status/überfällig filtern, nach
+  Nummer/Kunde suchen und Spalten sortieren.
 - **Hell-/Dunkel-Modus** — umschaltbar, Auswahl wird gespeichert.
 - **Sicherheit** — Login-Sperre nach zu vielen Fehlversuchen (Brute-Force-Schutz,
   5 Min. Sperre nach 5 Fehlversuchen), **CSRF-Schutz** für alle schreibenden
@@ -264,7 +274,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 ### Rechnungen
 | Methode | Pfad | Zweck |
 |---------|------|-------|
-| `GET`   | `/api/invoices?search=` | History / Liste |
+| `GET`   | `/api/invoices?search=` | Rechnungsübersicht / Liste |
 | `POST`  | `/api/invoices` | Rechnung anlegen |
 | `GET`   | `/api/invoices/{id}` | Einzelne Rechnung |
 | `PUT`   | `/api/invoices/{id}` | Rechnung bearbeiten |
@@ -311,6 +321,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/stats` | Dashboard-Kennzahlen |
 | `GET`   | `/api/customers?active_only=` | Stammkunden auflisten |
 | `POST`  | `/api/customers` | Stammkunde anlegen |
+| `POST`  | `/api/customers/import` | Kunden aus CSV importieren (multipart, Feld `file`) |
 | `PUT`   | `/api/customers/{id}` | Stammkunde bearbeiten |
 | `PATCH` | `/api/customers/{id}/active` | Aktiv/inaktiv setzen |
 | `DELETE`| `/api/customers/{id}` | Stammkunde löschen |

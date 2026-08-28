@@ -99,6 +99,14 @@ input[type="date"] { color-scheme: dark; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
 
 table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; }
+/* Breite Listen (Kunden, Rechnungen, ...) haben mehr Spalten als in die Karte
+   passen. Statt über den Rand hinauszulaufen, bekommen sie einen eigenen
+   waagerechten Scrollbereich; die Seite selbst scrollt nie seitwärts. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll > table { min-width: 100%; }
+td.cell-wrap { overflow-wrap: anywhere; min-width: 12ch; }
+#customers-table td, #customers-table th { vertical-align: top; }
+#customers-table .actions { min-width: 22ch; }
 th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
 th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; }
 #items-table input { margin: 0; }
@@ -143,6 +151,11 @@ button.secondary { background: var(--card-2); color: var(--text); margin-top: 0.
 #form-msg { margin-left: 1rem; font-weight: 600; }
 .ok { color: var(--green); }
 .err { color: var(--red); }
+.warn-text { color: var(--orange); }
+
+/* Kunden-Import: Dateiauswahl in der Leiste */
+.bar input[type="file"] { margin: 0; padding: 0.4rem 0.55rem; }
+#customer-import-msg { min-height: 1.2em; }
 
 .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .remove-item { color: var(--red); background: var(--card-2); border: 1px solid var(--border); }
@@ -200,10 +213,20 @@ label.inline input { width: auto; margin: 0; }
 
 /* Bearbeitungssperre / Warnhinweise */
 .warn-banner {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
   background: #2e2a16; color: var(--orange); border: 1px solid var(--orange);
   border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem;
 }
+.warn-banner .banner-text { flex: 1; }
 :root[data-theme="light"] .warn-banner { background: #fff3e0; }
+
+/* "✕" zum Ausblenden von Sperr-, Anwesenheits- und Entwurfshinweisen */
+.banner-close {
+  background: transparent; border: 1px solid transparent; color: inherit;
+  opacity: 0.7; padding: 0.1rem 0.45rem; font-size: 0.9rem; line-height: 1.2;
+  margin-left: auto;
+}
+.banner-close:hover { opacity: 1; border-color: currentColor; }
 
 tr.inactive-row { opacity: 0.55; }
 .badge.inactive { background: #2a2f3a; color: var(--muted); }
@@ -230,10 +253,12 @@ tr.inactive-row { opacity: 0.55; }
 /* Live-Anzeige: wer hat denselben Beleg gerade offen */
 .presence-banner {
   display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  /* der Text nimmt den Platz, "✕" bleibt rechts */
   background: var(--card-2); color: var(--text);
   border: 1px solid var(--border); border-left: 3px solid var(--orange);
   border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.9rem;
 }
+.presence-banner .banner-text { flex: 1; }
 .presence-dot { cursor: help; font-size: 0.9em; }
 
 /* Markierung am Reiter, wenn dort ein ungespeicherter Entwurf liegt */

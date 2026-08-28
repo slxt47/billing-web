@@ -216,6 +216,28 @@ function customerMatches(c, q) {
     .some((v) => String(v || "").toLowerCase().includes(q));
 }
 
+/** Wie gut passt ein Kunde zur Suche? Größer ist besser. */
+function matchScore(c, q) {
+  const name = String(c.name || "").toLowerCase();
+  const rest = [c.contact_person, c.email, c.address].map((v) => String(v || "").toLowerCase());
+  if (name === q) return 100;
+  if (name.startsWith(q)) return 80;
+  if (rest.some((v) => v.startsWith(q))) return 60;
+  if (name.includes(q)) return 40;
+  return 20;
+}
+
+/** Bester Treffer einer Suche – bei Gleichstand gewinnt der kürzere Name. */
+function bestMatch(list, q) {
+  let best = null, bestScore = -1;
+  for (const c of list) {
+    const score = matchScore(c, q);
+    const shorter = best && String(c.name || "").length < String(best.name || "").length;
+    if (score > bestScore || (score === bestScore && shorter)) { best = c; bestScore = score; }
+  }
+  return best;
+}
+
 function fillPicker(p) {
   const q = p.search.value.trim().toLowerCase();
   const previous = p.select.value || p.pending || "";
@@ -224,21 +246,37 @@ function fillPicker(p) {
   placeholder.value = "";
   p.select.appendChild(placeholder);
 
-  let hits = 0;
+  const matches = [];
   for (const c of customersCache) {
     if (!c.active || !customerMatches(c, q)) continue;
     const opt = document.createElement("option");
     opt.value = c.id;
     opt.textContent = c.contact_person ? `${c.name} — ${c.contact_person}` : c.name;
     p.select.appendChild(opt);
-    hits++;
+    matches.push(c);
   }
-  placeholder.textContent = q && !hits
+  placeholder.textContent = q && !matches.length
     ? "– kein Kunde passt zur Suche –"
     : "– neuen Kunden eingeben –";
-  const stillThere = [...p.select.options].some((o) => o.value === previous);
-  p.select.value = stillThere ? previous : "";
-  if (stillThere) p.pending = "";
+
+  // Eine bereits getroffene Auswahl bleibt stehen, solange sie zur Suche passt.
+  if (previous && matches.some((c) => String(c.id) === previous)) {
+    p.select.value = previous;
+    p.pending = "";
+    p.applied = previous;
+    return;
+  }
+  // Wer sucht, meint einen bestimmten Kunden: den besten Treffer gleich
+  // auswählen und übernehmen, statt auf "neuen Kunden eingeben" stehen zu
+  // bleiben. Übernommen wird nur bei einem Wechsel – sonst würde jeder weitere
+  // Tastendruck von Hand geänderte Felder wieder überschreiben.
+  const best = q ? bestMatch(matches, q) : null;
+  p.select.value = best ? String(best.id) : "";
+  if (!best) { p.applied = ""; return; }
+  if (String(best.id) !== p.applied) {
+    p.applied = String(best.id);
+    p.apply(best);
+  }
 }
 
 /** Auswahl vormerken, solange die Kundenliste noch nicht geladen ist. */
@@ -246,13 +284,16 @@ function setPendingCustomer(selectSel, id) {
   const picker = customerPickers.find((p) => p.select === $(selectSel));
   if (!picker) return;
   picker.pending = id ? String(id) : "";
+  // Vorgemerkt heißt: die Stammdaten stehen schon im Formular (Entwurf) bzw.
+  // sollen bewusst leer bleiben – nicht noch einmal übernehmen.
+  picker.applied = picker.pending;
   fillPicker(picker);
 }
 
 function registerCustomerPicker(selectSel, searchSel, apply) {
   const select = $(selectSel), search = $(searchSel);
   if (!select || !search) return;
-  const picker = { select, search, apply, pending: "" };
+  const picker = { select, search, apply, pending: "", applied: "" };
   customerPickers.push(picker);
   search.addEventListener("input", () => fillPicker(picker));
   select.addEventListener("change", () => {
@@ -315,6 +356,42 @@ function emailForCustomer(name) {
   return c && c.email ? c.email : "";
 }
 
+// ---------------------- Hinweisbanner über den Formularen -----------------
+// Sperre, Anwesenheit und wiederhergestellter Entwurf melden sich über dem
+// Formular von Rechnung, Angebot und Lieferschein. Wer den Hinweis gelesen
+// hat, blendet ihn mit "✕" aus; er kommt erst wieder, wenn er etwas Neues zu
+// sagen hat (anderer Text) oder der Beleg neu geöffnet wird.
+const dismissedBanners = {};
+
+function bannerSlot(banner) {
+  return banner.querySelector(".banner-text, .draft-text") || banner;
+}
+
+function showBanner(sel, text) {
+  const banner = $(sel);
+  if (!banner) return;
+  bannerSlot(banner).textContent = text;
+  banner.hidden = dismissedBanners[sel] === text;
+}
+
+function hideBanner(sel) {
+  const banner = $(sel);
+  if (!banner) return;
+  banner.hidden = true;
+  bannerSlot(banner).textContent = "";
+  delete dismissedBanners[sel];
+}
+
+document.querySelectorAll("[data-hide-banner]").forEach((btn) => {
+  btn.onclick = () => {
+    const sel = btn.dataset.hideBanner;
+    const banner = $(sel);
+    if (!banner) return;
+    dismissedBanners[sel] = bannerSlot(banner).textContent;
+    banner.hidden = true;
+  };
+});
+
 // ---------------------- Live-Anzeige: wer ist noch hier? ------------------
 // Ergänzung zur Bearbeitungssperre: die verhindert zwar, dass zwei Leute
 // dieselbe Rechnung gleichzeitig speichern, sagt einem aber während des
@@ -338,23 +415,17 @@ let currentPresence = null;      // { type, id } – höchstens ein Beleg gleich
 let presenceTimer = null;
 let presenceMap = {};            // "typ:id" -> [{username, …}] für die Listen
 
-function presenceBanner(type) {
-  return $(PRESENCE_BANNERS[type]);
-}
-
 function renderPresenceBanner(type, others) {
-  const banner = presenceBanner(type);
-  if (!banner) return;
+  const sel = PRESENCE_BANNERS[type];
+  if (!sel || !$(sel)) return;
   if (!others || !others.length) {
-    banner.hidden = true;
-    banner.textContent = "";
+    hideBanner(sel);
     return;
   }
   const names = others.map((o) => o.username).join(", ");
-  banner.textContent = others.length === 1
+  showBanner(sel, others.length === 1
     ? `👀 ${names} hat ${DOC_LABEL[type]} gerade ebenfalls geöffnet.`
-    : `👀 ${names} haben ${DOC_LABEL[type]} gerade ebenfalls geöffnet.`;
-  banner.hidden = false;
+    : `👀 ${names} haben ${DOC_LABEL[type]} gerade ebenfalls geöffnet.`);
 }
 
 async function sendPresenceHeartbeat() {
@@ -446,7 +517,7 @@ function resetInvoiceForm() {
   $("#invoice-submit").textContent = "Rechnung speichern";
   $("#invoice-cancel-edit").hidden = true;
   $("#auto-email-row").hidden = false;
-  $("#lock-banner").hidden = true;
+  hideBanner("#lock-banner");
   $("#form-msg").textContent = "";
   clearDraft("invoice");
   setPendingCustomer("#customer-select", "");
@@ -485,8 +556,8 @@ async function openInvoiceForEdit(id) {
   $("#invoice-submit").textContent = "Änderungen speichern";
   $("#invoice-cancel-edit").hidden = false;
   $("#auto-email-row").hidden = true;
-  $("#lock-banner").hidden = false;
-  $("#lock-banner").textContent = `🔒 Rechnung ${inv.number} ist für dich gesperrt, solange du sie bearbeitest.`;
+  showBanner("#lock-banner",
+    `🔒 Rechnung ${inv.number} ist für dich gesperrt, solange du sie bearbeitest.`);
   $("#form-msg").textContent = "";
   startLockHeartbeat(id);
   show("new");
@@ -758,7 +829,7 @@ function renderCustomers() {
       <td>${esc(c.name)}</td>
       <td>${esc(c.email) || "–"}</td>
       <td>${esc(c.contact_person) || "–"}</td>
-      <td>${esc((c.address || "").replace(/\n/g, ", "))}</td>
+      <td class="cell-wrap">${esc((c.address || "").replace(/\n/g, ", "))}</td>
       <td>${c.payment_term_days} Tage</td>
       <td>${skonto}</td>
       <td><span class="badge ${c.active ? "bezahlt" : "inactive"}">${c.active ? "aktiv" : "inaktiv"}</span></td>
@@ -853,6 +924,55 @@ $("#customer-form").addEventListener("submit", async (e) => {
     resetCustomerForm(); loadCustomers();
   } else { msg.textContent = "Fehler beim Speichern."; msg.className = "err"; }
 });
+
+// ---------------------- Kunden-Import (CSV) ------------------------------
+// Ergänzung zur Eingabemaske: eine bestehende Kundenliste (Excel/CSV) lässt
+// sich in einem Rutsch übernehmen. Ausgewertet wird die Datei serverseitig
+// (POST /api/customers/import), hier hängt nur die Bedienung dran.
+const CSV_EXAMPLE = [
+  "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage",
+  "Muster GmbH;info@muster.example;Frau Muster;Musterweg 1, 12345 Musterstadt;30;2;7",
+  "Beispiel AG;kontakt@beispiel.example;Herr Beispiel;Beispielstr. 2, 54321 Beispielstadt;14;0;0",
+].join("\r\n");
+
+function importMessage(text, cls) {
+  const msg = $("#customer-import-msg");
+  if (!msg) return;
+  msg.textContent = text;
+  msg.className = cls ? cls : "hint";
+}
+
+$("#customer-import-example").onclick = () => {
+  const blob = new Blob(["\ufeff" + CSV_EXAMPLE], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "kunden-vorlage.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+$("#customer-import-btn").onclick = async () => {
+  const input = $("#customer-import-file");
+  const file = input.files && input.files[0];
+  if (!file) { importMessage("Bitte zuerst eine CSV-Datei auswählen.", "err"); return; }
+
+  importMessage("Import läuft …");
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/api/customers/import", { method: "POST", body: fd });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    importMessage("Import fehlgeschlagen: " + (err.detail || res.status), "err");
+    return;
+  }
+  const r = await res.json();
+  const parts = [`✓ ${r.created} neu angelegt`, `${r.updated} aktualisiert`];
+  if (r.skipped) parts.push(`${r.skipped} übersprungen`);
+  importMessage(parts.join(", ") + (r.errors && r.errors.length ? ` – ${r.errors.join("; ")}` : ""),
+                r.skipped ? "warn-text" : "ok");
+  input.value = "";
+  loadCustomers();
+};
 
 // ---------------------- Artikel-Verwaltung ----------------------
 async function refreshProducts() {
@@ -1344,19 +1464,24 @@ async function deliveryAction(act, d) {
 }
 
 // ---------------------- Firmendaten / Logo ----------------------
+function showLogo(hasLogo) {
+  const img = $("#logo-preview");
+  if (hasLogo) {
+    img.src = "/api/settings/logo?ts=" + Date.now();
+    img.hidden = false; $("#logo-none").hidden = true;
+  } else {
+    img.removeAttribute("src");
+    img.hidden = true; $("#logo-none").hidden = false;
+  }
+}
+
 async function loadSettings() {
   const s = await (await fetch("/api/settings")).json();
   const f = $("#settings-form");
   for (const k of ["company_name", "email", "phone", "tax_id", "vat_id", "iban", "bic", "address"]) {
     if (f[k]) f[k].value = s[k] || "";
   }
-  const img = $("#logo-preview");
-  if (s.has_logo) {
-    img.src = "/api/settings/logo?ts=" + Date.now();
-    img.hidden = false; $("#logo-none").hidden = true;
-  } else {
-    img.hidden = true; $("#logo-none").hidden = false;
-  }
+  showLogo(s.has_logo);
 }
 
 $("#settings-form").addEventListener("submit", async (e) => {
@@ -1381,8 +1506,18 @@ $("#logo-input").addEventListener("change", async (e) => {
   const fd = new FormData();
   fd.append("file", file);
   const res = await fetch("/api/settings/logo", { method: "POST", body: fd });
-  if (res.ok) loadSettings();
-  else { const er = await res.json().catch(() => ({})); alert("Fehler: " + (er.detail || res.status)); }
+  if (res.ok) {
+    // Nur die Vorschau erneuern: ein Neuladen der Einstellungen würde die
+    // eingetippten, noch nicht gespeicherten Firmendaten überschreiben.
+    showLogo(true);
+    e.target.value = "";
+    const msg = $("#settings-msg");
+    msg.textContent = "✓ Logo hochgeladen";
+    msg.className = "ok";
+  } else {
+    const er = await res.json().catch(() => ({}));
+    alert("Fehler: " + (er.detail || res.status));
+  }
 });
 
 // ---------------------- Benutzerverwaltung (Admin) ----------------------
@@ -1564,8 +1699,7 @@ function clearDraft(name) {
   const all = readDrafts();
   delete all[name];
   writeDrafts(all);
-  const banner = $(`#${name}-draft-banner`);
-  if (banner) banner.hidden = true;
+  hideBanner(`#${name}-draft-banner`);
   updateDraftHints();
 }
 
@@ -1591,11 +1725,8 @@ function saveDraftNow(name) {
 }
 
 function showDraftBanner(name, savedAt) {
-  const banner = $(`#${name}-draft-banner`);
-  if (!banner) return;
-  banner.querySelector(".draft-text").textContent =
-    `🗂️ Wiederhergestellt: nicht gespeicherte Eingaben vom ${new Date(savedAt).toLocaleString("de-DE")}.`;
-  banner.hidden = false;
+  showBanner(`#${name}-draft-banner`,
+    `🗂️ Wiederhergestellt: nicht gespeicherte Eingaben vom ${new Date(savedAt).toLocaleString("de-DE")}.`);
 }
 
 // --- Rechnung ---

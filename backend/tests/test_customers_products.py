@@ -102,6 +102,88 @@ def test_anonymize_is_admin_only(user_client):
     assert user_client.post(f"/api/customers/{customer['id']}/anonymize").status_code == 403
 
 
+# --------------------------- CSV-Import -----------------------------------
+def upload_csv(client, content: str, name: str = "kunden.csv", encoding: str = "utf-8"):
+    return client.post("/api/customers/import",
+                       files={"file": (name, content.encode(encoding), "text/csv")})
+
+
+def test_import_creates_customers(user_client):
+    csv_content = (
+        "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage\r\n"
+        "Import GmbH;info@import.example;Frau Import;Importweg 1, 12345 Ort;30;2,5;7\r\n"
+        "Zweite AG;;;;;;\r\n"
+    )
+    result = upload_csv(user_client, csv_content).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (2, 0, 0)
+
+    customers = {c["name"]: c for c in user_client.get("/api/customers").json()}
+    assert customers["Import GmbH"]["email"] == "info@import.example"
+    assert customers["Import GmbH"]["contact_person"] == "Frau Import"
+    assert customers["Import GmbH"]["payment_term_days"] == 30
+    assert customers["Import GmbH"]["skonto_percent"] == 2.5
+    assert customers["Import GmbH"]["skonto_days"] == 7
+    # Ohne Angaben gelten die Vorgabewerte aus CustomerIn
+    assert customers["Zweite AG"]["payment_term_days"] == 14
+
+
+def test_import_updates_existing_customer_instead_of_duplicating(user_client):
+    user_client.post("/api/customers", json=CUSTOMER)
+    result = upload_csv(user_client,
+                        "name,email\nstamm gmbh,neu@stamm.example\n").json()
+    assert (result["created"], result["updated"]) == (0, 1)
+
+    listing = user_client.get("/api/customers").json()
+    assert len(listing) == 1
+    assert listing[0]["email"] == "neu@stamm.example"
+
+
+def test_import_accepts_english_headers_and_comma_delimiter(user_client):
+    result = upload_csv(user_client,
+                        "customer_name,address,payment_term_days\n"
+                        "Comma Ltd,\"Some Street 1, 12345 Town\",21\n").json()
+    assert result["created"] == 1
+    customer = user_client.get("/api/customers").json()[0]
+    assert customer["address"] == "Some Street 1, 12345 Town"
+    assert customer["payment_term_days"] == 21
+
+
+def test_import_skips_rows_without_name_and_reports_bad_values(user_client):
+    csv_content = ("name;zahlungsfrist\n"
+                   ";30\n"
+                   "Krumme GmbH;minus drei\n"
+                   "Gute GmbH;10\n")
+    result = upload_csv(user_client, csv_content).json()
+    assert result["created"] == 1
+    assert result["skipped"] == 2
+    assert any("Krumme GmbH" in e for e in result["errors"])
+    assert [c["name"] for c in user_client.get("/api/customers").json()] == ["Gute GmbH"]
+
+
+def test_import_reads_windows_encoded_files(user_client):
+    result = upload_csv(user_client, "name\nMüller & Söhne KG\n",
+                        encoding="cp1252").json()
+    assert result["created"] == 1
+    assert user_client.get("/api/customers").json()[0]["name"] == "Müller & Söhne KG"
+
+
+def test_import_without_name_column_is_rejected(user_client):
+    response = upload_csv(user_client, "spalte1;spalte2\na;b\n")
+    assert response.status_code == 400
+    assert "Kundennamen" in response.json()["detail"]
+
+
+def test_import_rejects_empty_file(user_client):
+    assert upload_csv(user_client, "").status_code == 400
+
+
+def test_import_is_written_to_the_audit_log(admin_client):
+    upload_csv(admin_client, "name\nProtokoll GmbH\n")
+    entries = admin_client.get("/api/audit-log").json()
+    assert any(e["action"] == "import" and e["target_type"] == "customer"
+               for e in entries)
+
+
 # --------------------------- Artikel --------------------------------------
 def test_product_crud(user_client):
     product = user_client.post("/api/products",
