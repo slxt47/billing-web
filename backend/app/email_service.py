@@ -106,3 +106,36 @@ def send_delivery_note_email(delivery_note: models.DeliveryNote, to_email: str, 
     )
     _attach_and_send(to_email, settings, f"Lieferschein {delivery_note.number}", text,
                      pdf.delivery_note_pdf(delivery_note, settings), f"{delivery_note.number}.pdf")
+
+
+def send_credit_note_email(credit_note, to_email: str, settings=None) -> None:
+    """Gutschrift als PDF an den Kunden."""
+    sender = settings.company_name if settings and settings.company_name else "Ihr Rechnungssteller"
+    zu = (f" zur Rechnung {credit_note.invoice_number}"
+          if credit_note.invoice_number else "")
+    text = (
+        f"Guten Tag {credit_note.customer_name},\n\n"
+        f"anbei erhalten Sie die Gutschrift {credit_note.number}{zu} "
+        f"über {credit_note.total:.2f} EUR.\n\n"
+        f"Der Betrag wird erstattet bzw. mit der nächsten Rechnung verrechnet.\n\n"
+        f"Mit freundlichen Grüßen\n{sender}"
+    )
+    _attach_and_send(to_email, settings, f"Gutschrift {credit_note.number}", text,
+                     pdf.credit_note_pdf(credit_note, settings),
+                     f"{credit_note.number}.pdf")
+
+
+def send_alert_email(to_email: str, kind: str, text: str, settings=None) -> None:
+    """Betriebsalarm an die Firmenadresse – ohne Anhang, damit die Mail auch
+    dann noch rausgeht, wenn in der App gerade etwas klemmt."""
+    company = settings.company_name if settings and settings.company_name else "Rechnungs-App"
+    msg = EmailMessage()
+    msg["Subject"] = f"[Alarm] {company}: {kind}"
+    msg["From"] = (settings.email if settings and settings.email else config.MAIL_FROM)
+    msg["To"] = to_email
+    msg.set_content(
+        f"Automatische Meldung der Rechnungs-App\n\n{text}\n\n"
+        f"Einzelheiten stehen unter „Monitoring“ in der Anwendung.\n"
+        f"Diese Benachrichtigung lässt sich über ALERTS_ENABLED abschalten."
+    )
+    _smtp_send(msg)

@@ -307,6 +307,17 @@ nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #
 :root[data-theme="light"] .badge.ueberfaellig { background: #ffe9e9; }
 :root[data-theme="light"] input[type="date"] { color-scheme: light; }
 
+/* Farbtupfer in der Vorlagenliste */
+.swatch {
+  display: inline-block;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+  margin-right: 0.2rem;
+}
+
 /* Statt Umwandeln-Knopf: Verweis auf den Beleg, der schon daraus entstand. */
 .converted-marker {
   display: inline-block;
@@ -336,6 +347,7 @@ nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #
   border-radius: 10px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
+.popover.floating { position: fixed; }
 .popover .popover-title {
   margin: 0 0 0.2rem;
   font-size: 0.85rem;

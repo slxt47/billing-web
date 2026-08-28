@@ -3,6 +3,7 @@ import csv
 import io
 import json
 import zipfile
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, Depends, HTTPException, Form, Query, Request, UploadFile, File
@@ -15,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
 from . import (crud, models, schemas, pdf, auth, email_service, config, backup,
-               security, logging_setup)
+               security, logging_setup, reports, monitoring)
 from .database import get_db, init_db, SessionLocal
 
 app = FastAPI(title="Rechnungs-App")
@@ -24,6 +25,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 VALID_STATUS = {models.STATUS_OPEN, models.STATUS_PAID, models.STATUS_CANCELLED}
 VALID_QUOTE_STATUS = {models.QUOTE_OPEN, models.QUOTE_ACCEPTED, models.QUOTE_DECLINED}
 VALID_DN_STATUS = {models.DN_OPEN, models.DN_DONE, models.DN_CANCELLED}
+VALID_CN_STATUS = {models.CN_OPEN, models.CN_SETTLED, models.CN_CANCELLED}
 
 
 @app.on_event("startup")
@@ -40,6 +42,17 @@ def on_startup():
         "rate_limit": config.RATE_LIMIT_REQUESTS,
         "https_only_cookies": config.SESSION_HTTPS_ONLY,
     }})
+
+
+def pdf_template(db: Session, template_id: int | None):
+    """Vorlage für einen PDF-Download: ausdrücklich gewählte, sonst die
+    Vorgabe, sonst None (dann gelten die Werte in pdf.DEFAULTS)."""
+    if template_id is None:
+        return crud.default_pdf_template(db)
+    tpl = crud.get_pdf_template(db, template_id)
+    if not tpl:
+        raise HTTPException(404, "PDF-Vorlage nicht gefunden")
+    return tpl
 
 
 def require_admin(request: Request, db: Session = Depends(get_db)) -> models.User:
@@ -76,6 +89,7 @@ app.add_middleware(
     https_only=config.SESSION_HTTPS_ONLY,
     max_age=config.SESSION_MAX_AGE,
 )
+app.middleware("http")(monitoring.metrics_middleware)
 app.middleware("http")(security.rate_limit_middleware)
 app.middleware("http")(security.security_headers_middleware)
 app.middleware("http")(logging_setup.request_context_middleware)
@@ -111,6 +125,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         logging_setup.log.info("login", extra={"fields": {"user": username}})
         return RedirectResponse("/", status_code=303)
     auth.register_failure(key)
+    monitoring.record_login_failure(username)
     logging_setup.log.warning("login failed", extra={"fields": {"user": username}})
     return RedirectResponse("/login?error=1", status_code=303)
 
@@ -324,11 +339,12 @@ def add_payment(invoice_id: int, body: schemas.PaymentRequest,
 
 
 @app.get("/api/invoices/{invoice_id}/pdf")
-def download_pdf(invoice_id: int, db: Session = Depends(get_db)):
+def download_pdf(invoice_id: int, template: int | None = None,
+                 db: Session = Depends(get_db)):
     invoice = crud.get_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(404, "Rechnung nicht gefunden")
-    data = pdf.invoice_pdf(invoice, crud.get_settings(db))
+    data = pdf.invoice_pdf(invoice, crud.get_settings(db), pdf_template(db, template))
     return Response(
         content=data,
         media_type="application/pdf",
@@ -717,11 +733,12 @@ def delete_quote(quote_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/quotes/{quote_id}/pdf")
-def download_quote_pdf(quote_id: int, db: Session = Depends(get_db)):
+def download_quote_pdf(quote_id: int, template: int | None = None,
+                       db: Session = Depends(get_db)):
     quote = crud.get_quote(db, quote_id)
     if not quote:
         raise HTTPException(404, "Angebot nicht gefunden")
-    data = pdf.quote_pdf(quote, crud.get_settings(db))
+    data = pdf.quote_pdf(quote, crud.get_settings(db), pdf_template(db, template))
     return Response(
         content=data, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{quote.number}.pdf"'},
@@ -805,11 +822,12 @@ def delete_delivery_note(dn_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/delivery-notes/{dn_id}/pdf")
-def download_delivery_note_pdf(dn_id: int, db: Session = Depends(get_db)):
+def download_delivery_note_pdf(dn_id: int, template: int | None = None,
+                               db: Session = Depends(get_db)):
     dn = crud.get_delivery_note(db, dn_id)
     if not dn:
         raise HTTPException(404, "Lieferschein nicht gefunden")
-    data = pdf.delivery_note_pdf(dn, crud.get_settings(db))
+    data = pdf.delivery_note_pdf(dn, crud.get_settings(db), pdf_template(db, template))
     # Der Ausdruck ist der Abschluss: ein offener Lieferschein gilt danach als
     # abgeschlossen. Ein stornierter bleibt storniert, ein bereits
     # abgeschlossener ändert sich nicht.
@@ -860,6 +878,270 @@ def convert_invoice(invoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "Zu dieser Rechnung gibt es bereits den Lieferschein "
                                  f"{invoice.delivery_note_number}")
     return crud.convert_invoice_to_delivery_note(db, invoice)
+
+
+# --------------------------- Gutschriften --------------------------------
+@app.get("/api/credit-notes", response_model=list[schemas.CreditNoteOut])
+def list_credit_notes(response: Response, search: str | None = None,
+                      limit: int | None = Limit, offset: int = Offset,
+                      db: Session = Depends(get_db)):
+    return _with_total(response, crud.list_credit_notes(db, search, limit, offset))
+
+
+@app.post("/api/credit-notes", response_model=schemas.CreditNoteOut, status_code=201)
+def create_credit_note(data: schemas.CreditNoteIn, db: Session = Depends(get_db)):
+    if data.invoice_id is not None and not crud.get_invoice(db, data.invoice_id):
+        raise HTTPException(404, "Rechnung nicht gefunden")
+    return crud.create_credit_note(db, data)
+
+
+@app.get("/api/credit-notes/{cn_id}", response_model=schemas.CreditNoteOut)
+def get_credit_note(cn_id: int, db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    return cn
+
+
+@app.put("/api/credit-notes/{cn_id}", response_model=schemas.CreditNoteOut)
+def edit_credit_note(cn_id: int, data: schemas.CreditNoteIn,
+                     db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    if cn.status == models.CN_CANCELLED:
+        raise HTTPException(400, "Eine stornierte Gutschrift lässt sich nicht bearbeiten")
+    if data.invoice_id is not None and not crud.get_invoice(db, data.invoice_id):
+        raise HTTPException(404, "Rechnung nicht gefunden")
+    return crud.update_credit_note(db, cn, data)
+
+
+@app.patch("/api/credit-notes/{cn_id}/status", response_model=schemas.CreditNoteOut)
+def update_credit_note_status(cn_id: int, body: schemas.CreditNoteStatusUpdate,
+                              db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    if body.status not in VALID_CN_STATUS:
+        raise HTTPException(400, f"Ungültiger Status: {body.status}")
+    return crud.set_credit_note_status(db, cn, body.status)
+
+
+@app.delete("/api/credit-notes/{cn_id}", status_code=204)
+def delete_credit_note(cn_id: int, db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    crud.delete_credit_note(db, cn)
+    return Response(status_code=204)
+
+
+@app.get("/api/credit-notes/{cn_id}/pdf")
+def download_credit_note_pdf(cn_id: int, template: int | None = None,
+                             db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    data = pdf.credit_note_pdf(cn, crud.get_settings(db), pdf_template(db, template))
+    return Response(
+        content=data, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{cn.number}.pdf"'},
+    )
+
+
+@app.post("/api/credit-notes/{cn_id}/email")
+def email_credit_note(cn_id: int, body: schemas.EmailRequest,
+                      db: Session = Depends(get_db)):
+    cn = crud.get_credit_note(db, cn_id)
+    if not cn:
+        raise HTTPException(404, "Gutschrift nicht gefunden")
+    to = _valid_email(body.to)
+    try:
+        email_service.send_credit_note_email(cn, to, crud.get_settings(db))
+    except OSError as err:
+        raise HTTPException(502, f"E-Mail konnte nicht gesendet werden: {err}")
+    return {"sent": True, "to": to, "number": cn.number}
+
+
+@app.post("/api/invoices/{invoice_id}/credit-note",
+          response_model=schemas.CreditNoteOut, status_code=201)
+def credit_invoice(invoice_id: int, body: schemas.CreditNoteFromInvoice,
+                   db: Session = Depends(get_db)):
+    """Gutschrift zu einer Rechnung – ohne Positionen im Body eine
+    Vollgutschrift, mit Positionen eine Teilgutschrift. Mehrere Gutschriften
+    zu derselben Rechnung sind erlaubt, zusammen aber höchstens der noch
+    offene Betrag."""
+    invoice = crud.get_invoice(db, invoice_id)
+    if not invoice:
+        raise HTTPException(404, "Rechnung nicht gefunden")
+    if invoice.status == models.STATUS_CANCELLED:
+        raise HTTPException(400, "Eine stornierte Rechnung lässt sich nicht gutschreiben")
+    cn = crud.credit_note_from_invoice(db, invoice, body)
+    db.refresh(invoice)
+    if invoice.remaining < -0.005:  # Rundungsluft von einem halben Cent
+        crud.delete_credit_note(db, cn)
+        raise HTTPException(400, "Die Gutschrift übersteigt den offenen Betrag "
+                                 f"der Rechnung ({invoice.number})")
+    return cn
+
+
+# --------------------------- Monitoring ----------------------------------
+@app.get("/api/admin/metrics")
+def metrics(admin: models.User = Depends(require_admin),
+            db: Session = Depends(get_db)):
+    """Kennzahlen des laufenden Prozesses plus Bestandszahlen. Nur für
+    Administratoren – ein eigener Monitoring-Benutzer existiert nicht."""
+    return monitoring.snapshot(db)
+
+
+@app.get("/api/admin/metrics.prom")
+def metrics_prometheus(admin: models.User = Depends(require_admin),
+                       db: Session = Depends(get_db)):
+    """Dieselben Zahlen im Prometheus-Textformat zum Abholen."""
+    return Response(content=monitoring.prometheus(monitoring.snapshot(db)),
+                    media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.post("/api/admin/metrics/test-alert")
+def send_test_alert(admin: models.User = Depends(require_admin),
+                    db: Session = Depends(get_db)):
+    """Probealarm an die Firmen-E-Mail – damit sich prüfen lässt, ob die
+    Benachrichtigung ankommt, bevor es ernst wird."""
+    settings = crud.get_settings(db)
+    to = (settings.email or "").strip() if settings else ""
+    if not to:
+        raise HTTPException(400, "In den Firmendaten ist keine E-Mail-Adresse "
+                                 "hinterlegt – dorthin gehen die Alarme.")
+    try:
+        email_service.send_alert_email(
+            to, "test", "Probealarm: Die Benachrichtigung funktioniert.", settings)
+    except OSError as err:
+        raise HTTPException(502, f"E-Mail konnte nicht gesendet werden: {err}")
+    return {"sent": True, "to": to}
+
+
+# --------------------------- Auswertungen --------------------------------
+# Zeitraum als ?from=JJJJ-MM-TT&to=JJJJ-MM-TT. "from" ist in Python ein
+# Schlüsselwort, deshalb der Alias.
+FromDate = Query(None, alias="from")
+ToDate = Query(None, alias="to")
+
+
+def _period(start: date | None, end: date | None) -> tuple[date, date]:
+    """Zeitraum auflösen. Ohne Angabe: das laufende Jahr."""
+    today = date.today()
+    start = start or date(today.year, 1, 1)
+    end = end or date(today.year, 12, 31)
+    if end < start:
+        raise HTTPException(400, "Das Ende des Zeitraums liegt vor dem Anfang")
+    return start, end
+
+
+def _csv_response(text: str, filename: str) -> Response:
+    return Response(
+        content=text.encode("utf-8"), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/reports/vat")
+def vat_report(start: date | None = FromDate, end: date | None = ToDate,
+               db: Session = Depends(get_db)):
+    """Umsatzsteuer je Steuersatz im Zeitraum (Soll-Versteuerung), Gutschriften
+    abgezogen. Vorsteuer fehlt: Ausgaben erfasst die App nicht."""
+    return reports.vat_report(db, *_period(start, end))
+
+
+@app.get("/api/reports/vat.csv")
+def vat_report_csv(start: date | None = FromDate, end: date | None = ToDate,
+                   db: Session = Depends(get_db)):
+    a, b = _period(start, end)
+    return _csv_response(reports.vat_report_csv(reports.vat_report(db, a, b)),
+                         f"UStVA_{a.isoformat()}_{b.isoformat()}.csv")
+
+
+@app.get("/api/reports/revenue")
+def revenue_report(start: date | None = FromDate, end: date | None = ToDate,
+                   db: Session = Depends(get_db)):
+    """Erlöse je Monat und Kunde im Zeitraum, Gutschriften abgezogen."""
+    return reports.revenue_report(db, *_period(start, end))
+
+
+@app.get("/api/reports/revenue.csv")
+def revenue_report_csv(start: date | None = FromDate, end: date | None = ToDate,
+                       db: Session = Depends(get_db)):
+    a, b = _period(start, end)
+    return _csv_response(reports.revenue_report_csv(reports.revenue_report(db, a, b)),
+                         f"Erloese_{a.isoformat()}_{b.isoformat()}.csv")
+
+
+# --------------------------- PDF-Vorlagen --------------------------------
+@app.get("/api/pdf-templates", response_model=list[schemas.PdfTemplateOut])
+def list_pdf_templates(db: Session = Depends(get_db)):
+    """Lesen darf jeder angemeldete Benutzer: die Vorlagen stehen beim
+    Download zur Auswahl. Ändern dürfen nur Administratoren."""
+    return crud.list_pdf_templates(db)
+
+
+@app.post("/api/pdf-templates", response_model=schemas.PdfTemplateOut, status_code=201)
+def create_pdf_template(data: schemas.PdfTemplateIn,
+                        admin: models.User = Depends(require_admin),
+                        db: Session = Depends(get_db)):
+    if data.font_family not in pdf.FONT_FAMILIES:
+        raise HTTPException(400, f"Unbekannte Schrift: {data.font_family}")
+    if crud.get_pdf_template_by_name(db, data.name):
+        raise HTTPException(400, f"Es gibt schon eine Vorlage namens {data.name}")
+    return crud.create_pdf_template(db, data)
+
+
+@app.put("/api/pdf-templates/{template_id}", response_model=schemas.PdfTemplateOut)
+def edit_pdf_template(template_id: int, data: schemas.PdfTemplateIn,
+                      admin: models.User = Depends(require_admin),
+                      db: Session = Depends(get_db)):
+    tpl = crud.get_pdf_template(db, template_id)
+    if not tpl:
+        raise HTTPException(404, "PDF-Vorlage nicht gefunden")
+    if data.font_family not in pdf.FONT_FAMILIES:
+        raise HTTPException(400, f"Unbekannte Schrift: {data.font_family}")
+    other = crud.get_pdf_template_by_name(db, data.name)
+    if other and other.id != tpl.id:
+        raise HTTPException(400, f"Es gibt schon eine Vorlage namens {data.name}")
+    return crud.update_pdf_template(db, tpl, data)
+
+
+@app.post("/api/pdf-templates/{template_id}/default",
+          response_model=schemas.PdfTemplateOut)
+def set_default_pdf_template(template_id: int,
+                             admin: models.User = Depends(require_admin),
+                             db: Session = Depends(get_db)):
+    tpl = crud.get_pdf_template(db, template_id)
+    if not tpl:
+        raise HTTPException(404, "PDF-Vorlage nicht gefunden")
+    return crud.set_default_pdf_template(db, tpl)
+
+
+@app.delete("/api/pdf-templates/{template_id}", status_code=204)
+def delete_pdf_template(template_id: int,
+                        admin: models.User = Depends(require_admin),
+                        db: Session = Depends(get_db)):
+    tpl = crud.get_pdf_template(db, template_id)
+    if not tpl:
+        raise HTTPException(404, "PDF-Vorlage nicht gefunden")
+    crud.delete_pdf_template(db, tpl)
+    return Response(status_code=204)
+
+
+@app.get("/api/pdf-templates/{template_id}/preview")
+def preview_pdf_template(template_id: int, db: Session = Depends(get_db)):
+    """Musterrechnung mit dieser Vorlage – ohne echte Daten anzufassen."""
+    tpl = crud.get_pdf_template(db, template_id)
+    if not tpl:
+        raise HTTPException(404, "PDF-Vorlage nicht gefunden")
+    data = pdf.preview_pdf(crud.get_settings(db), tpl)
+    return Response(
+        content=data, media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="vorschau.pdf"'},
+    )
 
 
 # --------------------------- Anwesenheit (Live-Anzeige) ------------------

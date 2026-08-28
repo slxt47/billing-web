@@ -29,11 +29,11 @@ TECHNOLOGY STACK:
 | Backend    | Python 3.12/FastAPI/SQLAlchemy | Business logic, REST API   |
 | Database   | PostgreSQL 16     | Data persistence                         |
 | Frontend   | Vanilla JS/HTML/CSS | UI, served as static files by FastAPI  |
-| PDF        | ReportLab + qrcode | Invoice/quote/delivery-note PDFs + GiroCode |
+| PDF        | ReportLab + qrcode | Invoice/quote/delivery-note/credit-note PDFs + GiroCode, styled by a PDF template |
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 166 backend + 56 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 211 backend + 73 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -103,6 +103,12 @@ DATABASE SCHEMA (SQLAlchemy models in backend/app/models.py):
 | delivery_notes   | id, number (LS-YYYY-NNNN), customer_*, status,           |
 |                  | source_invoice_id                                        |
 | delivery_note_items | id, delivery_note_id, description, quantity            |
+| credit_notes     | id, number (GS-YYYY-NNNN), invoice_id, customer_*,       |
+|                  | issue_date, reason, tax_rate, small_business, status     |
+| credit_note_items | id, credit_note_id, description, quantity, unit_price   |
+| pdf_templates    | id, name, accent_color, header_color, font_family,       |
+|                  | font_size, header_note, footer_text, show_logo, show_qr, |
+|                  | is_default                                               |
 | settings         | id (=1, single row), company_name, address, tax_id,      |
 |                  | vat_id, iban, bic, email, phone, logo, logo_mime          |
 | audit_log        | id, timestamp, username, action, target_type, target_id, |
@@ -118,6 +124,55 @@ can carry the same running number forward with just the prefix changed
 (e.g. AN-2026-0007 -> RE-2026-0007 -> LS-2026-0007). Number assignment is
 serialized with a PostgreSQL advisory transaction lock
 (`pg_advisory_xact_lock`, fixed key) so concurrent users never collide.
+
+CREDIT NOTES:
+A credit note (`GS-YYYY-NNNN`, `crud.create_credit_note`) is its own document
+type, not a status on the invoice — an invoice can be credited in several
+steps. It shares the per-year number sequence with the other three. Linked to
+an invoice through `credit_notes.invoice_id`, it lowers that invoice's open
+amount: `Invoice.remaining = total − paid_amount − credited_amount`, where
+`credited_amount` sums the non-cancelled credit notes (relationship with
+`lazy="selectin"`). `POST /api/invoices/{id}/credit-note` builds one from the
+invoice — all items (full) or the posted ones (partial), with the invoice's
+discount folded into the unit prices — and refuses anything above the open
+amount, deleting the just-created note again so nothing half-done remains.
+The invoice status is deliberately NOT flipped to "bezahlt" by a credit note:
+credited is not paid. Dashboard revenue subtracts credited amounts.
+
+PDF TEMPLATES:
+`pdf.py` renders all four document types from shared building blocks
+(`_company_header`, `_head_table`, `_customer_block`, `_priced_items_table`,
+`_footer_factory`), all parameterised by `pdf._Layout` — the resolved
+template. Without a template, `pdf.DEFAULTS` reproduces the previous
+hard-coded look exactly. A `pdf_templates` row carries colours, one of the
+three built-in PDF font families (no font embedding), size, header/footer text
+and the logo/GiroCode switches; exactly one row is `is_default`. Every PDF
+endpoint takes `?template=<id>` (`main.pdf_template` resolves explicit id →
+default → None), and `/api/pdf-templates/{id}/preview` renders a sample
+invoice built in memory, so a template can be judged without touching real
+data.
+
+REPORTS:
+`reports.py` computes both analyses from the same base: non-cancelled
+invoices by issue date minus non-cancelled credit notes by issue date (accrual
+basis). `vat_report` buckets net/tax/gross per tax rate — small-business
+documents land in the 0 % bucket — and `revenue_report` aggregates per month
+and per customer plus paid/open. Both have a CSV twin (semicolon, German
+decimal commas, BOM). Neither knows expenses: the app does not track them, so
+the VAT report carries `input_tax_known: false` and the revenue report
+`expenses_tracked: false` rather than pretending to be a P&L.
+
+MONITORING:
+`monitoring.py` counts every request in an ASGI middleware (requests, status
+classes, slow requests, response-time sum/max, the last 20 server errors) and
+records failed logins from the login route. `GET /api/admin/metrics` returns
+that plus document counts; `/api/admin/metrics.prom` the same in Prometheus
+text format. Both are admin-only — there is no separate monitoring account.
+Alerts (many 5xx, many failed logins, stale or missing backup) go by e-mail to
+the company address from the settings, at most once per `ALERT_COOLDOWN` per
+kind; the check runs from the middleware at most once a minute and only when
+`ALERTS_ENABLED` is set. Like the login lockout and rate-limit counters, the
+state is per process (see the horizontal-scaling caveat).
 
 Each conversion may happen once. The link is a column on the target:
 `quotes.converted_invoice_id` (quote -> invoice), `delivery_notes
@@ -340,7 +395,7 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 166 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 211 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
 invoice/quote/delivery-note lifecycles, customers and products, admin-only
 endpoints and the audit log, and the security layer itself (CSRF rejection,
@@ -352,7 +407,7 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 56 frontend tests that load the real
+`backend/tests/frontend/` holds 73 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the sample-file
 downloads (CSV/JSON), the post-save navigation into the invoice overview, the

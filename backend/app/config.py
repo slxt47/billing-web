@@ -66,3 +66,21 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 # Obergrenze für ?limit=… bei Listen-Endpunkten. Ohne limit liefert die API
 # weiterhin alle Zeilen (das Frontend filtert/sortiert clientseitig).
 MAX_PAGE_SIZE = int(os.getenv("MAX_PAGE_SIZE", "500"))
+
+# --- Monitoring / Alarme --------------------------------------------------
+# Kennzahlen (/api/admin/metrics) laufen immer mit; sie kosten nur einen
+# Zähler je Request. Alarm-Mails gehen an die Firmen-E-Mail aus den
+# Firmendaten und sind standardmäßig aus, damit eine frische Installation
+# nicht ungefragt Mails verschickt (scripts/setup-prod.sh schaltet sie ein).
+ALERTS_ENABLED = _flag("ALERTS_ENABLED", "false")
+# Ab so vielen Serverfehlern (HTTP 5xx) im Beobachtungsfenster gibt es Alarm.
+ALERT_ERROR_THRESHOLD = int(os.getenv("ALERT_ERROR_THRESHOLD", "10"))
+# Ab so vielen fehlgeschlagenen Anmeldungen im Fenster ebenfalls.
+ALERT_LOGIN_THRESHOLD = int(os.getenv("ALERT_LOGIN_THRESHOLD", "20"))
+ALERT_WINDOW = int(os.getenv("ALERT_WINDOW", "300"))
+# Alter des jüngsten Backups, ab dem gewarnt wird (0 = diese Prüfung aus).
+ALERT_BACKUP_MAX_AGE_HOURS = int(os.getenv("ALERT_BACKUP_MAX_AGE_HOURS", "36"))
+# Dieselbe Art Alarm höchstens einmal pro Sperrfrist – kein Mailsturm.
+ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "3600"))
+# Antwortzeit, ab der ein Request als langsam gezählt wird (Sekunden).
+SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_SECONDS", "2"))

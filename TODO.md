@@ -95,17 +95,18 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
     einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
     und unbehandelte Fehler
-[X] Automatisierte Tests: 166 pytest-Tests in backend/tests/ gegen eine
+[X] Automatisierte Tests: 211 pytest-Tests in backend/tests/ gegen eine
     temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
     Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import), Admin-Endpunkte,
     Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 56 Frontend-Tests in backend/tests/frontend/, die die
+    backend/. Dazu 73 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
     Logo-Upload, Kundenimport, Beispieldateien als CSV/JSON, Listenfilter,
     Lieferscheinliste, Umwandlung Angebot -> Rechnung, gesperrte
     Doppelumwandlungen, Sprung in die Rechnungsübersicht nach dem Speichern,
-    CSRF-Header, Maskierung) –
+    Gutschriften, Auswertungen, Monitoring, PDF-Vorlagen, CSRF-Header,
+    Maskierung) –
     `npm install && npm test`, braucht Node >= 20
 
 
@@ -158,12 +159,25 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     ausgefallener SMTP-Server bricht die Zahlung nie ab
     (main._confirm_payment_if_settled)
 [X] Monatsexport als ZIP (ein PDF je Rechnung plus CSV-Zusammenfassung)
+[X] Gutschriften als eigene Belegart (GS-JJJJ-NNNN, models.CreditNote): mit
+    Positionen, Grund, PDF und E-Mail-Versand, im gemeinsamen Nummernkreis.
+    „Gutschrift“ in der Rechnungsübersicht übernimmt Kunde und Positionen der
+    Rechnung (Rabatt eingerechnet); einzelne Zeilen streichen oder ändern
+    ergibt eine Teilgutschrift. Mehrere je Rechnung sind erlaubt, zusammen
+    aber höchstens der offene Betrag. Eine Gutschrift senkt
+    remaining (= Gesamt − Zahlungen − Gutschriften) und den Umsatz im
+    Dashboard; der Rechnungsstatus wird bewusst nicht auf „bezahlt“ gedreht.
+    Status: offen, erstattet, storniert.
+[X] Eigene PDF-Vorlagen (models.PdfTemplate): beliebig viele benannte
+    Vorlagen mit Akzent-/Kopffarbe, Schrift und -größe, Kopf- und Fußtext,
+    Logo und GiroCode an/aus, eine davon als Vorgabe. Verwaltung in den
+    Firmendaten (nur Admins) samt Vorschau als Musterrechnung; jeder
+    PDF-Download nimmt ?template=<id>, und ab zwei Vorlagen fragt die Liste
+    beim Klick nach. Ohne Vorlage gilt pdf.DEFAULTS – das bisherige Aussehen.
+    pdf.py rendert alle vier Belegarten aus gemeinsamen Bausteinen.
 [ ] Wiederkehrende Rechnungen
 [ ] Freigabe-Workflow
-[ ] Teilgutschriften / Gutschriften als eigene Belegart (heute gibt es nur
-    Storno mit Rücksetzen)
 [ ] Mehrwährungsfähigkeit (bisher nur EUR)
-[ ] Eigene PDF-Vorlagen
 [ ] Dateianhänge an Rechnungen
 
 
@@ -208,9 +222,18 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Der Reiter heißt „Rechnungsübersicht“ (früher „History“); die View-ID
     `view-history`, die Routen und die serverseitige Suche blieben
     unverändert.
+[X] Steuerbericht / UStVA-Grundlage (reports.vat_report, Reiter
+    „Auswertungen“): Netto, Umsatzsteuer und Brutto je Steuersatz für einen
+    frei wählbaren Zeitraum, nach Rechnungsdatum (Soll-Versteuerung),
+    Gutschriften abgezogen, stornierte Belege ausgenommen, Kleinunternehmer im
+    0-%-Topf. Dazu ein CSV-Export. Ohne Vorsteuer – siehe nächster Punkt.
+[ ] Gewinn-und-Verlust-Auswertung – halb erledigt: die Erlösseite steht
+    (reports.revenue_report: Erlös netto/brutto, Gutschriften, bezahlt, offen,
+    je Monat und je Kunde, mit CSV-Export). Was fehlt, ist die Ausgabenseite:
+    ohne erfasste Ausgaben gibt es weder ein Betriebsergebnis noch die
+    Vorsteuer für die UStVA. Nächster Schritt wäre eine Belegart „Ausgabe“
+    (Datum, Kategorie, Beschreibung, Netto, MwSt.) mit eigener Ansicht.
 [ ] Freier Report-Builder
-[ ] Eigener Steuerbericht / UStVA-Export
-[ ] Gewinn-und-Verlust-Auswertung
 
 
 --------------------------------------------------------------------------------
@@ -236,8 +259,17 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Angebote, Lieferscheine, Kunden, Artikel und das Audit-Log; die
     Gesamtzahl kommt immer im Header X-Total-Count. Ohne ?limit kommt die
     ganze Liste, ältere Aufrufer laufen also weiter.
-[ ] Monitoring / Observability (strukturierte Logs gibt es, aber keinen
-    Metrics-Endpunkt, kein Dashboard, kein Alerting)
+[X] Monitoring / Observability (monitoring.py): eine Middleware zählt
+    Requests, Statusklassen, langsame Anfragen, Antwortzeiten und die letzten
+    20 Serverfehler, dazu Fehlanmeldungen und das Alter des jüngsten Backups.
+    Ausgelesen wird das im Reiter „Monitoring“ (nur Admins, kein eigener
+    Monitoring-Benutzer), als JSON über /api/admin/metrics und im
+    Prometheus-Textformat über /api/admin/metrics.prom. Alarme bei gehäuften
+    Serverfehlern, vielen Fehlanmeldungen oder zu altem Backup gehen per
+    E-Mail an die Firmenadresse aus den Firmendaten, gedrosselt über eine
+    Sperrfrist je Alarmart und schaltbar über ALERTS_ENABLED (Vorgabe aus,
+    scripts/setup-prod.sh schaltet ein). Probealarm über die Oberfläche.
+    Die Zähler liegen wie Login-Sperre und Rate-Limit im Prozess.
 [ ] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
     `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
     mehrere Repliken nicht überstehen)
@@ -282,6 +314,17 @@ Sonst ist hier nichts geparkt.
 --------------------------------------------------------------------------------
 10. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-28, sechster Durchgang
+  * Gutschriften als eigene Belegart, voll oder in Teilen zur Rechnung
+    (Abschnitt 3).
+  * Eigene PDF-Vorlagen samt Auswahl beim Download und Vorschau
+    (Abschnitt 3); pdf.py auf gemeinsame Bausteine umgebaut.
+  * Auswertungen: UStVA-Grundlage und Erlösrechnung mit CSV-Export
+    (Abschnitt 5). Die Ausgabenseite fehlt weiterhin und bleibt offen.
+  * Monitoring mit Kennzahlen, Prometheus-Ausgabe und Alarm-Mails
+    (Abschnitt 6).
+  * Teststand: 211 Backend- und 73 Frontend-Tests.
+
 2026-08-28, fünfter Durchgang
   * Umwandlungen lassen sich nicht mehr doppeln (Abschnitt 3): die API
     lehnt den zweiten Versuch ab und nennt den vorhandenen Beleg, die Listen
