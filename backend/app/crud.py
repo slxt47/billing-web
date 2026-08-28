@@ -62,6 +62,7 @@ def _next_doc_suffix(db: Session, year: int) -> int:
         _table_max_suffix(db, models.Quote, "AN", year),
         _table_max_suffix(db, models.Invoice, "RE", year),
         _table_max_suffix(db, models.DeliveryNote, "LS", year),
+        _table_max_suffix(db, models.CreditNote, "GS", year),
     )
 
 
@@ -135,7 +136,8 @@ def set_status(db: Session, invoice: models.Invoice, status: str) -> models.Invo
     )
     # Zahlungsbetrag konsistent halten
     if status == models.STATUS_PAID:
-        invoice.paid_amount = invoice.total
+        # Gutgeschriebenes ist nicht zu zahlen: nur der Rest zählt als Zahlung.
+        invoice.paid_amount = round(invoice.total - invoice.credited_amount, 2)
     elif status == models.STATUS_OPEN:
         invoice.paid_amount = 0
     db.commit()
@@ -302,7 +304,8 @@ def dashboard_stats(db: Session) -> dict:
         .all()
     )
     today = date.today()
-    total_revenue = sum(i.total for i in invoices)
+    # Gutgeschriebenes ist kein Umsatz.
+    total_revenue = sum(i.total - i.credited_amount for i in invoices)
     open_amount = sum(i.remaining for i in invoices if i.status != models.STATUS_PAID)
     overdue_amount = sum(i.remaining for i in invoices if i.is_overdue)
     paid_count = sum(1 for i in invoices if i.status == models.STATUS_PAID)
@@ -318,7 +321,7 @@ def dashboard_stats(db: Session) -> dict:
             m = 12
             y -= 1
     for (yy, mm) in reversed(seq):
-        rev = sum(i.total for i in invoices
+        rev = sum(i.total - i.credited_amount for i in invoices
                   if i.issue_date.year == yy and i.issue_date.month == mm)
         months.append({"label": f"{mm:02d}/{yy}", "revenue": round(rev, 2)})
 
@@ -862,6 +865,7 @@ def convert_delivery_note_to_quote(db: Session, dn: models.DeliveryNote) -> mode
         this_year = date.today().year
         number = f"AN-{this_year}-{_next_doc_suffix(db, this_year):04d}"
     quote = _build_quote(data, number)
+    quote.source_delivery_note_id = dn.id
     db.add(quote)
     try:
         db.commit()
@@ -899,3 +903,194 @@ def convert_invoice_to_delivery_note(db: Session, invoice: models.Invoice) -> mo
         raise RuntimeError(f"Lieferscheinnummer {number} ist bereits vergeben")
     db.refresh(dn)
     return dn
+
+
+# --------------------------- Gutschriften --------------------------------
+def _build_credit_note(data: schemas.CreditNoteIn, number: str) -> models.CreditNote:
+    cn = models.CreditNote(
+        number=number,
+        invoice_id=data.invoice_id,
+        customer_name=data.customer_name,
+        customer_address=data.customer_address,
+        customer_contact_person=data.customer_contact_person,
+        issue_date=date.today(),
+        reason=data.reason,
+        tax_rate=data.tax_rate,
+        small_business=data.small_business,
+    )
+    for it in data.items:
+        cn.items.append(models.CreditNoteItem(
+            description=it.description, quantity=it.quantity,
+            unit_price=it.unit_price,
+        ))
+    return cn
+
+
+def create_credit_note(db: Session, data: schemas.CreditNoteIn) -> models.CreditNote:
+    for _ in range(10):
+        _lock_doc_numbers(db)
+        year = date.today().year
+        number = f"GS-{year}-{_next_doc_suffix(db, year):04d}"
+        cn = _build_credit_note(data, number)
+        db.add(cn)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            continue
+        db.refresh(cn)
+        return cn
+    raise RuntimeError("Konnte keine eindeutige Gutschriftsnummer vergeben")
+
+
+def list_credit_notes(db: Session, search: str | None = None,
+                      limit: int | None = None, offset: int = 0) -> tuple[list, int]:
+    q = db.query(models.CreditNote)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(models.CreditNote.number.ilike(like)
+                     | models.CreditNote.customer_name.ilike(like))
+    return _page(q.order_by(models.CreditNote.id.desc()), limit, offset)
+
+
+def get_credit_note(db: Session, credit_note_id: int) -> models.CreditNote | None:
+    return db.get(models.CreditNote, credit_note_id)
+
+
+def update_credit_note(db: Session, cn: models.CreditNote,
+                       data: schemas.CreditNoteIn) -> models.CreditNote:
+    cn.customer_name = data.customer_name
+    cn.customer_address = data.customer_address
+    cn.customer_contact_person = data.customer_contact_person
+    cn.invoice_id = data.invoice_id
+    cn.reason = data.reason
+    cn.tax_rate = data.tax_rate
+    cn.small_business = data.small_business
+    cn.items = [
+        models.CreditNoteItem(description=it.description, quantity=it.quantity,
+                              unit_price=it.unit_price)
+        for it in data.items
+    ]
+    db.commit()
+    db.refresh(cn)
+    return cn
+
+
+def set_credit_note_status(db: Session, cn: models.CreditNote,
+                           status: str) -> models.CreditNote:
+    cn.status = status
+    db.commit()
+    db.refresh(cn)
+    return cn
+
+
+def delete_credit_note(db: Session, cn: models.CreditNote) -> None:
+    db.delete(cn)
+    db.commit()
+
+
+def credit_note_from_invoice(db: Session, invoice: models.Invoice,
+                             data: schemas.CreditNoteFromInvoice) -> models.CreditNote:
+    """Gutschrift zu einer Rechnung. Ohne Positionen wird alles
+    gutgeschrieben (Vollgutschrift), sonst nur die übergebenen Zeilen
+    (Teilgutschrift). Rabatt und Kleinunternehmer-Modus der Rechnung werden
+    übernommen, der Rabatt dabei in die Einzelpreise eingerechnet."""
+    factor = 1 - float(invoice.discount_percent or 0) / 100
+    items = data.items or [
+        schemas.CreditNoteItemIn(
+            description=it.description,
+            quantity=float(it.quantity),
+            unit_price=round(float(it.unit_price) * factor, 2),
+        )
+        for it in invoice.items
+    ]
+    return create_credit_note(db, schemas.CreditNoteIn(
+        customer_name=invoice.customer_name,
+        customer_address=invoice.customer_address or "",
+        customer_contact_person=invoice.customer_contact_person or "",
+        invoice_id=invoice.id,
+        reason=data.reason,
+        tax_rate=float(invoice.tax_rate),
+        small_business=bool(invoice.small_business),
+        items=items,
+    ))
+
+
+def credit_notes_in_period(db: Session, start: date, end: date) -> list[models.CreditNote]:
+    """Nicht stornierte Gutschriften mit Belegdatum im Zeitraum."""
+    return (
+        db.query(models.CreditNote)
+        .filter(models.CreditNote.status != models.CN_CANCELLED)
+        .filter(models.CreditNote.issue_date >= start)
+        .filter(models.CreditNote.issue_date <= end)
+        .order_by(models.CreditNote.issue_date.asc())
+        .all()
+    )
+
+
+# --------------------------- PDF-Vorlagen --------------------------------
+def list_pdf_templates(db: Session) -> list[models.PdfTemplate]:
+    return (db.query(models.PdfTemplate)
+            .order_by(models.PdfTemplate.is_default.desc(),
+                      models.PdfTemplate.name.asc())
+            .all())
+
+
+def get_pdf_template(db: Session, template_id: int) -> models.PdfTemplate | None:
+    return db.get(models.PdfTemplate, template_id)
+
+
+def get_pdf_template_by_name(db: Session, name: str) -> models.PdfTemplate | None:
+    return (db.query(models.PdfTemplate)
+            .filter(models.PdfTemplate.name == name).first())
+
+
+def default_pdf_template(db: Session) -> models.PdfTemplate | None:
+    """Vorgabe-Vorlage, oder None – dann gilt pdf.DEFAULTS."""
+    return (db.query(models.PdfTemplate)
+            .filter(models.PdfTemplate.is_default.is_(True)).first())
+
+
+def _apply_template(tpl: models.PdfTemplate, data: schemas.PdfTemplateIn) -> None:
+    for field in ("name", "accent_color", "header_color", "font_family",
+                  "font_size", "header_note", "footer_text", "show_logo", "show_qr"):
+        setattr(tpl, field, getattr(data, field))
+
+
+def create_pdf_template(db: Session, data: schemas.PdfTemplateIn) -> models.PdfTemplate:
+    tpl = models.PdfTemplate()
+    _apply_template(tpl, data)
+    # Die erste Vorlage ist automatisch die Vorgabe, sonst hätte sie niemand.
+    tpl.is_default = db.query(models.PdfTemplate).count() == 0
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def update_pdf_template(db: Session, tpl: models.PdfTemplate,
+                        data: schemas.PdfTemplateIn) -> models.PdfTemplate:
+    _apply_template(tpl, data)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def set_default_pdf_template(db: Session, tpl: models.PdfTemplate) -> models.PdfTemplate:
+    db.query(models.PdfTemplate).update({models.PdfTemplate.is_default: False})
+    tpl.is_default = True
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def delete_pdf_template(db: Session, tpl: models.PdfTemplate) -> None:
+    was_default = tpl.is_default
+    db.delete(tpl)
+    db.commit()
+    if was_default:
+        # Ohne Vorgabe stünde die App ohne Vorlage da: die nächste übernimmt.
+        nxt = db.query(models.PdfTemplate).order_by(models.PdfTemplate.id.asc()).first()
+        if nxt:
+            nxt.is_default = True
+            db.commit()

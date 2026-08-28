@@ -57,6 +57,11 @@ _set_env CSRF_ENABLED "true"
 _set_env HSTS_ENABLED "true"
 echo "✓ Cookies auf 'secure', CSRF-Schutz und HSTS aktiviert."
 
+# Alarm-Mails: im Produktivbetrieb sinnvoll, sobald in den Firmendaten eine
+# E-Mail-Adresse hinterlegt ist (dorthin gehen sie).
+_set_env ALERTS_ENABLED "true"
+echo "✓ Betriebsalarme aktiviert (gehen an die Firmen-E-Mail aus den Firmendaten)."
+
 # --- 2) Echter SMTP-Versand ------------------------------------------------
 echo
 echo "-- E-Mail-Versand --"

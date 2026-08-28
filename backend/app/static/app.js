@@ -95,6 +95,9 @@ const views = {
   quotes: $("#view-quotes"),
   delivery: $("#view-delivery"),
   history: $("#view-history"),
+  credit: $("#view-credit"),
+  reports: $("#view-reports"),
+  monitoring: $("#view-monitoring"),
   customers: $("#view-customers"),
   products: $("#view-products"),
   settings: $("#view-settings"),
@@ -115,6 +118,9 @@ function show(view) {
   if (view === "quotes") loadQuotes();
   if (view === "delivery") loadDeliveryNotes();
   if (view === "history") { historyNotice(""); loadHistory(); }
+  if (view === "credit") loadCreditNotes();
+  if (view === "reports") loadReports();
+  if (view === "monitoring") loadMonitoring();
   if (view === "customers") loadCustomers();
   if (view === "products") loadProducts();
   if (view === "settings") loadSettings();
@@ -336,9 +342,17 @@ registerCustomerPicker("#delivery-customer-select", "#delivery-customer-search",
   saveDraftSoon("delivery");
 });
 
+registerCustomerPicker("#credit-customer-select", "#credit-customer-search", (c) => {
+  const f = $("#credit-form");
+  f.customer_name.value = c.name;
+  f.customer_address.value = c.address || "";
+  f.customer_contact_person.value = c.contact_person || "";
+});
+
 function fillProductDatalist() {
   const active = productsCache.filter((x) => x.active);
-  for (const sel of ["#product-list", "#quote-product-list", "#delivery-product-list"]) {
+  for (const sel of ["#product-list", "#quote-product-list", "#delivery-product-list",
+                     "#credit-product-list"]) {
     const dl = $(sel);
     dl.innerHTML = "";
     for (const p of active) {
@@ -681,11 +695,18 @@ function renderHistory() {
       <td class="col-num">${inv.remaining > 0 ? euro(inv.remaining) : "–"}</td>
       <td><span class="badge ${badge}">${label}</span></td>
       <td class="actions">
-        <a class="link" href="/api/invoices/${inv.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
+        <a class="link" href="/api/invoices/${inv.id}/pdf" data-act="pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" data-id="${inv.id}" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${inv.status !== "storniert" ? `<button class="link" data-act="edit" data-id="${inv.id}" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
         ${inv.status !== "storniert" && inv.remaining > 0 ? `<button class="link" data-act="pay" data-id="${inv.id}" title="Zahlung erfassen">💶 <span>Zahlung</span></button>` : ""}
-        ${inv.status !== "storniert" ? `<button class="link" data-act="to-delivery" data-id="${inv.id}" title="In Lieferschein umwandeln">📦 <span>Lieferschein</span></button>` : ""}
+        ${inv.delivery_note_number
+          ? convertedMarker("📦", inv.delivery_note_number)
+          : inv.status !== "storniert"
+            ? `<button class="link" data-act="to-delivery" data-id="${inv.id}" title="In Lieferschein umwandeln">📦 <span>Lieferschein</span></button>`
+            : ""}
+        ${inv.status !== "storniert" && inv.remaining > 0
+          ? `<button class="link" data-act="credit" data-id="${inv.id}" title="Gutschrift zu dieser Rechnung">↩️ <span>Gutschrift</span></button>`
+          : ""}
         ${inv.is_overdue ? `<button class="warn" data-act="remind" data-id="${inv.id}" title="Zahlungserinnerung senden">🔔 <span>Mahnen</span></button>` : ""}
         ${inv.status === "storniert"
           ? `<button class="link" data-act="reopen" data-id="${inv.id}" title="Storno rückgängig">↩️ <span>zurück</span></button>`
@@ -702,6 +723,7 @@ function renderHistory() {
 
 async function handleAction(act, id, inv) {
   if (act === "edit") { openInvoiceForEdit(id); return; }
+  if (act === "credit") { startCreditNoteForInvoice(inv); return; }
   if (act === "to-delivery") {
     if (!confirm(`Rechnung ${inv ? inv.number : id} jetzt in einen Lieferschein umwandeln?`)) return;
     const res = await fetch(`/api/invoices/${id}/convert-to-delivery-note`, { method: "POST" });
@@ -972,11 +994,16 @@ function importMessage(text, cls) {
 
 function downloadFile(name, content, type) {
   const blob = new Blob([content], { type });
+  downloadUrl(URL.createObjectURL(blob), name);
+}
+
+/** Datei vom Server holen, ohne die Ansicht zu verlassen. */
+function downloadUrl(url, name = "") {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
+  a.href = url;
+  if (name) a.download = name;
   a.click();
-  URL.revokeObjectURL(a.href);
+  if (url.startsWith("blob:")) URL.revokeObjectURL(url);
 }
 
 // Der Knopf lädt nicht sofort herunter, sondern fragt in einem kleinen Fenster
@@ -1295,6 +1322,16 @@ async function loadQuotes() {
   renderQuotes();
 }
 
+/**
+ * Marker statt Umwandeln-Knopf: aus diesem Beleg ist bereits ein anderer
+ * entstanden. Die API lehnt eine zweite Umwandlung ohnehin ab – hier steht
+ * nur, welcher Beleg schon existiert.
+ */
+function convertedMarker(icon, number) {
+  return `<span class="converted-marker" title="Bereits umgewandelt – eine zweite `
+       + `Umwandlung würde den Beleg doppeln">${icon} ${esc(number)}</span>`;
+}
+
 function renderQuotes() {
   const q0 = $("#quote-search").value.trim().toLowerCase();
   const status = $("#quote-filter-status").value;
@@ -1315,12 +1352,14 @@ function renderQuotes() {
       <td class="col-num">${euro(q.total)}</td>
       <td><span class="badge ${QUOTE_BADGE_CLASS[q.status] || "offen"}">${esc(q.status)}</span></td>
       <td class="actions">
-        <a class="link" href="/api/quotes/${q.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
+        <a class="link" href="/api/quotes/${q.id}/pdf" data-act="pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${q.status === "offen" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
         ${q.status === "offen" ? `<button class="link" data-act="accept" title="Als angenommen markieren">✅ <span>annehmen</span></button>` : ""}
         ${q.status === "offen" ? `<button class="warn" data-act="decline" title="Als abgelehnt markieren">🚫 <span>ablehnen</span></button>` : ""}
-        ${q.status !== "umgewandelt" ? `<button class="link" data-act="convert" title="In Rechnung umwandeln">🧾 <span>zu Rechnung</span></button>` : ""}
+        ${q.status === "umgewandelt" || q.converted_invoice_number
+          ? convertedMarker("🧾", q.converted_invoice_number || "umgewandelt")
+          : `<button class="link" data-act="convert" title="In Rechnung umwandeln">🧾 <span>zu Rechnung</span></button>`}
         <button class="danger" data-act="delete" title="Angebot löschen">🗑️ <span>löschen</span></button>
       </td>`;
     tr.querySelectorAll("button[data-act]").forEach((btn) => {
@@ -1503,7 +1542,11 @@ function renderDeliveryNotes() {
            title="PDF herunterladen – der Lieferschein gilt danach als abgeschlossen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${d.status !== "storniert" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
-        ${d.status !== "storniert" ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>` : ""}
+        ${d.converted_quote_number
+          ? convertedMarker("📄", d.converted_quote_number)
+          : d.status !== "storniert"
+            ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>`
+            : ""}
         ${d.status === "offen"
           ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
           : `<button class="link" data-act="reopen" title="Wieder auf offen setzen">↩️ <span>wieder öffnen</span></button>`}
@@ -1567,6 +1610,397 @@ async function deliveryAction(act, d) {
   }
 }
 
+// ---------------------- Gutschriften ----------------------
+// Eigene Belegart: eine Gutschrift mindert den offenen Betrag ihrer Rechnung.
+// Aus der Rechnungsübersicht heraus kommen die Positionen gleich mit; von
+// Hand geht es auch ohne Rechnungsbezug.
+const creditItemsBody = $("#credit-items-body");
+let creditCache = [];
+
+const CN_BADGE_CLASS = { offen: "offen", erstattet: "bezahlt", storniert: "storniert" };
+
+function addCreditItemRow(desc = "", qty = 1, price = 0) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input class="ci-desc" type="text" list="credit-product-list" placeholder="Leistung / Artikel"></td>
+    <td><input class="ci-qty col-num" type="number" min="0" step="0.01"></td>
+    <td><input class="ci-price col-num" type="number" min="0" step="0.01"></td>
+    <td><button type="button" class="remove-item" title="Entfernen">✕</button></td>`;
+  tr.querySelector(".ci-desc").value = desc;
+  tr.querySelector(".ci-qty").value = qty;
+  tr.querySelector(".ci-price").value = price;
+  tr.querySelector(".remove-item").onclick = () => tr.remove();
+  creditItemsBody.appendChild(tr);
+}
+$("#credit-add-item").onclick = () => addCreditItemRow();
+
+function creditInvoiceHint(invoice) {
+  const hint = $("#credit-invoice-hint");
+  if (!invoice) { hint.hidden = true; hint.textContent = ""; return; }
+  hint.hidden = false;
+  hint.textContent = `Gutschrift zu Rechnung ${invoice.number} `
+    + `(offen: ${euro(invoice.remaining)}). Positionen lassen sich streichen `
+    + `oder ändern – dann wird nur der Rest gutgeschrieben.`;
+}
+
+/** „Gutschrift" in der Rechnungsübersicht: Formular mit der Rechnung füllen. */
+function startCreditNoteForInvoice(inv) {
+  if (!inv) return;
+  resetCreditForm();
+  const f = $("#credit-form");
+  f.invoice_id.value = inv.id;
+  f.customer_name.value = inv.customer_name;
+  f.customer_address.value = inv.customer_address || "";
+  f.customer_contact_person.value = inv.customer_contact_person || "";
+  f.tax_rate.value = inv.tax_rate;
+  f.small_business.checked = !!inv.small_business;
+  // Rabatt der Rechnung steckt im Einzelpreis der Gutschrift.
+  const factor = 1 - (inv.discount_percent || 0) / 100;
+  creditItemsBody.innerHTML = "";
+  for (const it of inv.items || []) {
+    addCreditItemRow(it.description, it.quantity,
+                     Math.round(it.unit_price * factor * 100) / 100);
+  }
+  if (!creditItemsBody.children.length) addCreditItemRow();
+  creditInvoiceHint(inv);
+  show("credit");
+}
+
+function startCreditEdit(cn) {
+  resetCreditForm();
+  const f = $("#credit-form");
+  f.credit_id.value = cn.id;
+  f.invoice_id.value = cn.invoice_id || "";
+  f.customer_name.value = cn.customer_name;
+  f.customer_address.value = cn.customer_address || "";
+  f.customer_contact_person.value = cn.customer_contact_person || "";
+  f.tax_rate.value = cn.tax_rate;
+  f.small_business.checked = !!cn.small_business;
+  f.reason.value = cn.reason || "";
+  creditItemsBody.innerHTML = "";
+  for (const it of cn.items) addCreditItemRow(it.description, it.quantity, it.unit_price);
+  $("#credit-form-title").textContent = `Gutschrift ${cn.number} bearbeiten`;
+  $("#credit-submit").textContent = "Änderungen speichern";
+  $("#credit-cancel-edit").hidden = false;
+  if (cn.invoice_number) {
+    const hint = $("#credit-invoice-hint");
+    hint.hidden = false;
+    hint.textContent = `Gehört zu Rechnung ${cn.invoice_number}.`;
+  }
+}
+
+function resetCreditForm() {
+  const f = $("#credit-form");
+  f.reset();
+  f.credit_id.value = "";
+  f.invoice_id.value = "";
+  f.tax_rate.value = 20;
+  creditItemsBody.innerHTML = "";
+  addCreditItemRow();
+  creditInvoiceHint(null);
+  $("#credit-form-title").textContent = "Neue Gutschrift erstellen";
+  $("#credit-submit").textContent = "Gutschrift speichern";
+  $("#credit-cancel-edit").hidden = true;
+  $("#credit-msg").textContent = "";
+  setPendingCustomer("#credit-customer-select", "");
+}
+$("#credit-cancel-edit").addEventListener("click", resetCreditForm);
+
+$("#credit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = $("#credit-msg");
+  const items = [...creditItemsBody.querySelectorAll("tr")].map((tr) => ({
+    description: tr.querySelector(".ci-desc").value.trim(),
+    quantity: parseFloat(tr.querySelector(".ci-qty").value) || 0,
+    unit_price: parseFloat(tr.querySelector(".ci-price").value) || 0,
+  })).filter((it) => it.description && it.quantity > 0);
+
+  if (!items.length) {
+    msg.textContent = "Mindestens eine Position mit Beschreibung und Menge nötig.";
+    msg.className = "err";
+    return;
+  }
+
+  const f = e.target;
+  const editId = f.credit_id.value;
+  const payload = {
+    customer_name: f.customer_name.value.trim(),
+    customer_address: f.customer_address.value,
+    customer_contact_person: f.customer_contact_person.value.trim(),
+    invoice_id: f.invoice_id.value ? Number(f.invoice_id.value) : null,
+    reason: f.reason.value,
+    tax_rate: parseFloat(f.tax_rate.value) || 0,
+    small_business: f.small_business.checked,
+    items,
+  };
+
+  const res = await fetch(editId ? `/api/credit-notes/${editId}` : "/api/credit-notes", {
+    method: editId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.ok) {
+    const cn = await res.json();
+    resetCreditForm();
+    loadCreditNotes();
+    msg.textContent = `✓ Gespeichert als ${cn.number}`;
+    msg.className = "ok";
+  } else {
+    const err = await res.json().catch(() => ({}));
+    msg.textContent = "Fehler beim Speichern: " + (err.detail || res.status);
+    msg.className = "err";
+  }
+});
+
+async function loadCreditNotes() {
+  creditCache = await (await fetch("/api/credit-notes")).json();
+  renderCreditNotes();
+}
+
+function renderCreditNotes() {
+  const q0 = $("#credit-search").value.trim().toLowerCase();
+  const status = $("#credit-filter-status").value;
+  const rows = creditCache.filter((c) =>
+    (!status || c.status === status) &&
+    (!q0 || `${c.number} ${c.customer_name}`.toLowerCase().includes(q0)));
+
+  const body = $("#credit-body");
+  body.innerHTML = "";
+  $("#credit-empty").hidden = creditCache.length > 0;
+  $("#credit-nomatch").hidden = creditCache.length === 0 || rows.length > 0;
+  for (const c of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(c.number)}</td>
+      <td>${esc(c.customer_name)}</td>
+      <td>${c.invoice_number ? esc(c.invoice_number) : "–"}</td>
+      <td>${fmtDate(c.issue_date)}</td>
+      <td class="col-num">${euro(c.total)}</td>
+      <td><span class="badge ${CN_BADGE_CLASS[c.status] || "offen"}">${esc(c.status)}</span></td>
+      <td class="actions">
+        <a class="link" href="/api/credit-notes/${c.id}/pdf" data-act="pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
+        <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
+        ${c.status !== "storniert" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
+        ${c.status === "offen" ? `<button class="link" data-act="settle" title="Als erstattet markieren">✅ <span>erstattet</span></button>` : ""}
+        ${c.status !== "storniert"
+          ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
+          : `<button class="link" data-act="reopen" title="Storno rückgängig">↩️ <span>zurück</span></button>`}
+        <button class="danger" data-act="delete" title="Gutschrift löschen">🗑️ <span>löschen</span></button>
+      </td>`;
+    tr.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.onclick = () => creditAction(btn.dataset.act, c);
+    });
+    body.appendChild(tr);
+  }
+}
+
+$("#credit-search").addEventListener("input", renderCreditNotes);
+$("#credit-filter-status").addEventListener("change", renderCreditNotes);
+
+async function creditAction(act, c) {
+  if (act === "edit") { startCreditEdit(c); return; }
+  if (act === "email") {
+    const to = prompt("Gutschrift per E-Mail senden an:", emailForCustomer(c.customer_name));
+    if (!to) return;
+    const res = await fetch(`/api/credit-notes/${c.id}/email`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: to.trim() }),
+    });
+    if (res.ok) alert(`✓ ${c.number} gesendet.`);
+    else { const e = await res.json().catch(() => ({})); alert("Fehler: " + (e.detail || res.status)); }
+    return;
+  }
+  if (act === "delete") {
+    if (!confirm(`Gutschrift ${c.number} wirklich löschen?`)) return;
+    await fetch(`/api/credit-notes/${c.id}`, { method: "DELETE" });
+    loadCreditNotes();
+    return;
+  }
+  const map = { settle: "erstattet", cancel: "storniert", reopen: "offen" };
+  if (map[act]) {
+    await fetch(`/api/credit-notes/${c.id}/status`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: map[act] }),
+    });
+    loadCreditNotes();
+  }
+}
+
+// ---------------------- Auswertungen ----------------------
+function reportPeriod() {
+  const from = $("#report-from").value;
+  const to = $("#report-to").value;
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  return params.toString();
+}
+
+async function loadReports() {
+  if (!$("#report-from").value) {
+    const year = new Date().getFullYear();
+    $("#report-from").value = `${year}-01-01`;
+    $("#report-to").value = `${year}-12-31`;
+  }
+  const query = reportPeriod();
+  const [vat, revenue] = await Promise.all([
+    fetch(`/api/reports/vat?${query}`).then((r) => r.json()),
+    fetch(`/api/reports/revenue?${query}`).then((r) => r.json()),
+  ]);
+  renderVatReport(vat);
+  renderRevenueReport(revenue);
+}
+
+function renderVatReport(report) {
+  const body = $("#vat-body");
+  body.innerHTML = "";
+  for (const r of report.rows || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.tax_rate}&nbsp;%</td>
+      <td class="col-num">${euro(r.net)}</td>
+      <td class="col-num">${euro(r.tax)}</td>
+      <td class="col-num">${euro(r.gross)}</td>
+      <td class="col-num">${r.invoice_count}</td>
+      <td class="col-num">${r.credit_note_count}</td>`;
+    body.appendChild(tr);
+  }
+  $("#vat-total").innerHTML = `
+    <th>Summe</th>
+    <th class="col-num">${euro(report.net_total)}</th>
+    <th class="col-num">${euro(report.tax_total)}</th>
+    <th class="col-num">${euro(report.gross_total)}</th>
+    <th></th><th></th>`;
+}
+
+function kpiTiles(target, tiles) {
+  $(target).innerHTML = tiles.map(([val, label, cls = ""]) =>
+    `<div class="kpi ${cls}"><div class="kpi-val">${val}</div>` +
+    `<div class="kpi-label">${esc(label)}</div></div>`).join("");
+}
+
+function renderRevenueReport(report) {
+  kpiTiles("#revenue-kpis", [
+    [euro(report.net), "Erlös netto", "blue"],
+    [euro(report.gross), "Erlös brutto"],
+    [euro(report.credited_net), "Gutschriften netto", "red"],
+    [euro(report.paid), "Bezahlt", "green"],
+    [euro(report.open_amount), "Noch offen"],
+    [String(report.invoice_count), "Rechnungen"],
+  ]);
+
+  const months = $("#revenue-month-body");
+  months.innerHTML = "";
+  for (const m of report.months || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(m.label)}</td>
+      <td class="col-num">${euro(m.invoiced_net)}</td>
+      <td class="col-num">${euro(m.credited_net)}</td>
+      <td class="col-num">${euro(m.net)}</td>
+      <td class="col-num">${euro(m.gross)}</td>`;
+    months.appendChild(tr);
+  }
+
+  const customers = $("#revenue-customer-body");
+  customers.innerHTML = "";
+  for (const c of report.customers || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(c.customer_name)}</td>
+      <td class="col-num">${euro(c.net)}</td>
+      <td class="col-num">${euro(c.credited_net)}</td>
+      <td class="col-num">${c.invoice_count}</td>`;
+    customers.appendChild(tr);
+  }
+}
+
+$("#report-refresh").onclick = loadReports;
+$("#report-year").onclick = () => {
+  const year = new Date().getFullYear();
+  $("#report-from").value = `${year}-01-01`;
+  $("#report-to").value = `${year}-12-31`;
+  loadReports();
+};
+$("#report-from").addEventListener("change", loadReports);
+$("#report-to").addEventListener("change", loadReports);
+$("#vat-csv").onclick = () => downloadUrl(`/api/reports/vat.csv?${reportPeriod()}`, "ustva.csv");
+$("#revenue-csv").onclick = () =>
+  downloadUrl(`/api/reports/revenue.csv?${reportPeriod()}`, "erloese.csv");
+
+// ---------------------- Monitoring (nur Admin) ----------------------
+function fmtDuration(seconds) {
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  return `${Math.floor(s / 86400)} Tage`;
+}
+
+async function loadMonitoring() {
+  const res = await fetch("/api/admin/metrics");
+  if (!res.ok) return;
+  const m = await res.json();
+
+  const errorRate = (m.error_rate * 100).toFixed(2).replace(".", ",");
+  kpiTiles("#monitoring-kpis", [
+    [fmtDuration(m.uptime_seconds), "Laufzeit"],
+    [String(m.requests_total), "Requests"],
+    [String(m.server_errors_total), "Serverfehler", m.server_errors_total ? "red" : "green"],
+    [`${errorRate} %`, "Fehlerquote"],
+    [`${(m.avg_response_seconds * 1000).toFixed(0)} ms`, "Antwortzeit ⌀"],
+    [String(m.slow_requests_total), "langsame Requests"],
+    [String(m.failed_logins_in_window), `Fehlanmeldungen (${m.alert_window_seconds / 60} min)`,
+     m.failed_logins_in_window ? "red" : ""],
+    [m.backup_age_hours === null ? "–" : `${Math.round(m.backup_age_hours)} h`, "jüngstes Backup"],
+  ]);
+
+  const docs = m.documents || {};
+  kpiTiles("#monitoring-documents", [
+    [String(docs.invoices ?? 0), "Rechnungen"],
+    [String(docs.quotes ?? 0), "Angebote"],
+    [String(docs.delivery_notes ?? 0), "Lieferscheine"],
+    [String(docs.credit_notes ?? 0), "Gutschriften"],
+    [String(docs.customers ?? 0), "Kunden"],
+    [String(docs.users ?? 0), "Benutzer"],
+  ]);
+
+  const a = m.alerts || {};
+  const lastSent = Object.entries(a.last_sent || {})
+    .map(([kind, at]) => `${kind}: ${at}`).join(", ");
+  $("#monitoring-alerts").textContent = a.enabled
+    ? `Alarm-Mails an die Firmen-E-Mail sind aktiv. Schwellen: `
+      + `${a.error_threshold} Serverfehler bzw. ${a.login_threshold} Fehlanmeldungen `
+      + `je ${m.alert_window_seconds / 60} Minuten, Backup älter als `
+      + `${a.backup_max_age_hours} h. Sperrfrist ${a.cooldown_seconds / 60} min.`
+      + (lastSent ? ` Zuletzt gemeldet – ${lastSent}.` : "")
+    : "Alarm-Mails sind abgeschaltet (ALERTS_ENABLED=false). "
+      + "Auffälligkeiten stehen weiterhin hier und im Log.";
+
+  const body = $("#monitoring-errors-body");
+  body.innerHTML = "";
+  for (const e of m.recent_errors || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(e.at)}</td><td>${esc(e.method)}</td><td>${esc(e.path)}</td>
+      <td>${e.status}</td><td>${esc(e.request_id || "–")}</td>`;
+    body.appendChild(tr);
+  }
+  $("#monitoring-noerrors").hidden = (m.recent_errors || []).length > 0;
+}
+
+$("#monitoring-refresh").onclick = loadMonitoring;
+$("#monitoring-prom").onclick = () => downloadUrl("/api/admin/metrics.prom", "metrics.prom");
+$("#monitoring-test-alert").onclick = async () => {
+  const msg = $("#monitoring-msg");
+  const res = await fetch("/api/admin/metrics/test-alert", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  msg.textContent = res.ok ? `✓ Probealarm an ${data.to} gesendet.`
+                           : "Fehler: " + (data.detail || res.status);
+  msg.className = res.ok ? "ok" : "err";
+};
+
 // ---------------------- Firmendaten / Logo ----------------------
 function showLogo(hasLogo) {
   const img = $("#logo-preview");
@@ -1586,6 +2020,7 @@ async function loadSettings() {
     if (f[k]) f[k].value = s[k] || "";
   }
   showLogo(s.has_logo);
+  loadPdfTemplates();
 }
 
 $("#settings-form").addEventListener("submit", async (e) => {
@@ -1622,6 +2057,181 @@ $("#logo-input").addEventListener("change", async (e) => {
     const er = await res.json().catch(() => ({}));
     alert("Fehler: " + (er.detail || res.status));
   }
+});
+
+// ---------------------- PDF-Vorlagen ----------------------
+// Verwaltung in den Firmendaten (nur Admins), Auswahl beim Download für alle.
+let templatesCache = [];
+
+async function refreshPdfTemplates() {
+  try {
+    const data = await (await fetch("/api/pdf-templates")).json();
+    templatesCache = Array.isArray(data) ? data : [];
+  } catch (_) {
+    templatesCache = [];
+  }
+}
+
+async function loadPdfTemplates() {
+  await refreshPdfTemplates();
+  renderPdfTemplates();
+}
+
+function renderPdfTemplates() {
+  const body = $("#template-body");
+  if (!body) return;
+  body.innerHTML = "";
+  $("#template-empty").hidden = templatesCache.length > 0;
+  for (const t of templatesCache) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(t.name)}</td>
+      <td>${esc(t.font_family)} ${t.font_size} pt</td>
+      <td>
+        <span class="swatch" style="background:${esc(t.accent_color)}"></span>
+        <span class="swatch" style="background:${esc(t.header_color)}"></span>
+      </td>
+      <td>${t.is_default ? "★ Vorgabe" : ""}</td>
+      <td class="actions">
+        <a class="link" href="/api/pdf-templates/${t.id}/preview" target="_blank"
+           rel="noopener" title="Musterrechnung ansehen">👁️ <span>Vorschau</span></a>
+        <button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>
+        ${t.is_default ? "" : `<button class="link" data-act="default" title="Als Vorgabe setzen">★ <span>Vorgabe</span></button>`}
+        <button class="danger" data-act="delete" title="Vorlage löschen">🗑️ <span>löschen</span></button>
+      </td>`;
+    tr.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.onclick = () => templateAction(btn.dataset.act, t);
+    });
+    body.appendChild(tr);
+  }
+}
+
+function startTemplateEdit(t) {
+  const f = $("#template-form");
+  f.template_id.value = t.id;
+  f.name.value = t.name;
+  f.font_family.value = t.font_family;
+  f.font_size.value = t.font_size;
+  f.accent_color.value = t.accent_color;
+  f.header_color.value = t.header_color;
+  f.header_note.value = t.header_note || "";
+  f.footer_text.value = t.footer_text || "";
+  f.show_logo.checked = !!t.show_logo;
+  f.show_qr.checked = !!t.show_qr;
+  $("#template-submit").textContent = "Änderungen speichern";
+  $("#template-cancel-edit").hidden = false;
+  $("#template-msg").textContent = "";
+}
+
+function resetTemplateForm() {
+  const f = $("#template-form");
+  f.reset();
+  f.template_id.value = "";
+  f.accent_color.value = "#2d6cdf";
+  f.header_color.value = "#2d3748";
+  f.font_size.value = 10;
+  f.show_logo.checked = true;
+  f.show_qr.checked = true;
+  $("#template-submit").textContent = "Vorlage speichern";
+  $("#template-cancel-edit").hidden = true;
+  $("#template-msg").textContent = "";
+}
+$("#template-cancel-edit").addEventListener("click", resetTemplateForm);
+
+async function templateAction(act, t) {
+  if (act === "edit") { startTemplateEdit(t); return; }
+  if (act === "default") {
+    await fetch(`/api/pdf-templates/${t.id}/default`, { method: "POST" });
+    loadPdfTemplates();
+    return;
+  }
+  if (act === "delete") {
+    if (!confirm(`Vorlage ${t.name} wirklich löschen?`)) return;
+    await fetch(`/api/pdf-templates/${t.id}`, { method: "DELETE" });
+    resetTemplateForm();
+    loadPdfTemplates();
+  }
+}
+
+$("#template-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const msg = $("#template-msg");
+  const editId = f.template_id.value;
+  const payload = {
+    name: f.name.value.trim(),
+    font_family: f.font_family.value,
+    font_size: parseFloat(f.font_size.value) || 10,
+    accent_color: f.accent_color.value,
+    header_color: f.header_color.value,
+    header_note: f.header_note.value,
+    footer_text: f.footer_text.value,
+    show_logo: f.show_logo.checked,
+    show_qr: f.show_qr.checked,
+  };
+  const res = await fetch(editId ? `/api/pdf-templates/${editId}` : "/api/pdf-templates", {
+    method: editId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    resetTemplateForm();
+    loadPdfTemplates();
+    msg.textContent = "✓ Vorlage gespeichert.";
+    msg.className = "ok";
+  } else {
+    const err = await res.json().catch(() => ({}));
+    msg.textContent = "Fehler beim Speichern: " + (err.detail || res.status);
+    msg.className = "err";
+  }
+});
+
+// Auswahl beim Download: gibt es mehr als eine Vorlage, fragt ein kleines
+// Fenster nach – sonst lädt der Link direkt mit der Vorgabe herunter.
+const pdfTemplateMenu = document.createElement("div");
+pdfTemplateMenu.className = "popover floating";
+pdfTemplateMenu.id = "pdf-template-menu";
+pdfTemplateMenu.hidden = true;
+document.body.appendChild(pdfTemplateMenu);
+
+function closePdfTemplateMenu() { pdfTemplateMenu.hidden = true; }
+
+function openPdfTemplateMenu(link) {
+  const href = link.getAttribute("href");
+  pdfTemplateMenu.innerHTML = `<p class="popover-title">Mit welcher Vorlage?</p>`;
+  const choices = [{ id: "", name: "Vorgabe" },
+                   ...templatesCache.map((t) => ({ id: t.id, name: t.name }))];
+  for (const choice of choices) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary";
+    btn.textContent = choice.name;
+    btn.onclick = () => {
+      closePdfTemplateMenu();
+      downloadUrl(choice.id ? `${href}?template=${choice.id}` : href);
+    };
+    pdfTemplateMenu.appendChild(btn);
+  }
+  const rect = link.getBoundingClientRect();
+  pdfTemplateMenu.style.top = `${rect.bottom + 4}px`;
+  pdfTemplateMenu.style.left = `${rect.left}px`;
+  pdfTemplateMenu.hidden = false;
+}
+
+document.addEventListener("click", (e) => {
+  const link = e.target.closest && e.target.closest('a[data-act="pdf"]');
+  if (!link) {
+    if (!pdfTemplateMenu.hidden && !pdfTemplateMenu.contains(e.target)) {
+      closePdfTemplateMenu();
+    }
+    return;
+  }
+  if (templatesCache.length < 2) return;   // nichts zu wählen
+  e.preventDefault();
+  openPdfTemplateMenu(link);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closePdfTemplateMenu();
 });
 
 // ---------------------- Benutzerverwaltung (Admin) ----------------------
@@ -2010,6 +2620,7 @@ async function loadCurrentUser() {
     $("#nav-settings").hidden = !currentIsAdmin;
     $("#nav-audit").hidden = !currentIsAdmin;
     $("#nav-backup").hidden = !currentIsAdmin;
+    $("#nav-monitoring").hidden = !currentIsAdmin;
   } catch (_) { /* fetch leitet bei 401 selbst um */ }
 }
 
@@ -2018,8 +2629,10 @@ $("#export-month").value = todayISO().slice(0, 7);
 addItemRow();
 addQuoteItemRow();
 addDeliveryItemRow();
+addCreditItemRow();
 restoreDrafts();
 loadCurrentUser();
 refreshCustomers();
 refreshProducts();
+refreshPdfTemplates();
 loadDashboard();

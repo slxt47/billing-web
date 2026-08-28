@@ -72,6 +72,8 @@ class InvoiceOut(BaseModel):
     skonto_date: Optional[date]
     locked_by: Optional[str] = None
     locked_at: Optional[datetime] = None
+    delivery_note_number: Optional[str] = None
+    credited_amount: float = 0
 
     class Config:
         from_attributes = True
@@ -239,6 +241,8 @@ class QuoteOut(BaseModel):
     status: str
     created_at: datetime
     converted_invoice_id: Optional[int]
+    converted_invoice_number: Optional[str] = None
+    source_delivery_note_id: Optional[int] = None
     items: list[QuoteItemOut]
     subtotal: float
     discount_amount: float
@@ -308,6 +312,7 @@ class DeliveryNoteOut(BaseModel):
     status: str
     created_at: datetime
     source_invoice_id: Optional[int]
+    converted_quote_number: Optional[str] = None
     items: list[DeliveryNoteItemOut]
 
     class Config:
@@ -316,3 +321,89 @@ class DeliveryNoteOut(BaseModel):
 
 class DeliveryNoteStatusUpdate(BaseModel):
     status: str
+
+
+# --------------------------- Gutschriften --------------------------------
+class CreditNoteItemIn(BaseModel):
+    description: str = Field(..., min_length=1, max_length=300)
+    quantity: float = Field(..., gt=0)
+    unit_price: float = Field(..., ge=0)
+
+
+class CreditNoteItemOut(CreditNoteItemIn):
+    id: int
+    line_total: float
+
+    class Config:
+        from_attributes = True
+
+
+class CreditNoteIn(BaseModel):
+    customer_name: str = Field(..., min_length=1, max_length=200)
+    customer_address: str = ""
+    customer_contact_person: str = Field("", max_length=200)
+    invoice_id: Optional[int] = None
+    reason: str = ""
+    tax_rate: float = Field(20, ge=0, le=100)
+    small_business: bool = False
+    items: list[CreditNoteItemIn] = Field(..., min_length=1)
+
+
+class CreditNoteOut(BaseModel):
+    id: int
+    number: str
+    invoice_id: Optional[int]
+    invoice_number: Optional[str] = None
+    customer_name: str
+    customer_address: str
+    customer_contact_person: str
+    issue_date: date
+    reason: str
+    tax_rate: float
+    small_business: bool
+    status: str
+    created_at: datetime
+    items: list[CreditNoteItemOut]
+    subtotal: float
+    net: float
+    tax_amount: float
+    total: float
+
+    class Config:
+        from_attributes = True
+
+
+class CreditNoteStatusUpdate(BaseModel):
+    status: str
+
+
+class CreditNoteFromInvoice(BaseModel):
+    """Gutschrift aus einer Rechnung. Ohne `items` werden alle Positionen der
+    Rechnung übernommen (Vollgutschrift); mit `items` nur die angegebenen
+    (Teilgutschrift)."""
+    reason: str = ""
+    items: Optional[list[CreditNoteItemIn]] = None
+
+
+# --------------------------- PDF-Vorlagen --------------------------------
+HEX_COLOR = r"^#[0-9a-fA-F]{6}$"
+
+
+class PdfTemplateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    accent_color: str = Field("#2d6cdf", pattern=HEX_COLOR)
+    header_color: str = Field("#2d3748", pattern=HEX_COLOR)
+    font_family: str = Field("Helvetica", max_length=20)
+    font_size: float = Field(10, ge=7, le=14)
+    header_note: str = Field("", max_length=500)
+    footer_text: str = Field("", max_length=300)
+    show_logo: bool = True
+    show_qr: bool = True
+
+
+class PdfTemplateOut(PdfTemplateIn):
+    id: int
+    is_default: bool
+
+    class Config:
+        from_attributes = True

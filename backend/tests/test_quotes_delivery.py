@@ -217,6 +217,75 @@ def test_delivery_note_conversion_avoids_a_taken_number(user_client):
     assert len(user_client.get("/api/quotes").json()) == 2
 
 
+# --------------------------- Keine Dubletten ------------------------------
+def test_invoice_converts_to_only_one_delivery_note(user_client):
+    invoice = make_invoice(user_client)
+    first = user_client.post(
+        f"/api/invoices/{invoice['id']}/convert-to-delivery-note").json()
+
+    second = user_client.post(f"/api/invoices/{invoice['id']}/convert-to-delivery-note")
+    assert second.status_code == 400
+    assert first["number"] in second.json()["detail"]
+    assert len(user_client.get("/api/delivery-notes").json()) == 1
+
+    # Die Liste zeigt den Verweis, damit das Frontend den Knopf weglassen kann.
+    listed = user_client.get("/api/invoices").json()[0]
+    assert listed["delivery_note_number"] == first["number"]
+
+
+def test_invoice_converts_again_after_the_delivery_note_is_gone(user_client):
+    invoice = make_invoice(user_client)
+    dn = user_client.post(
+        f"/api/invoices/{invoice['id']}/convert-to-delivery-note").json()
+    user_client.delete(f"/api/delivery-notes/{dn['id']}")
+
+    again = user_client.post(f"/api/invoices/{invoice['id']}/convert-to-delivery-note")
+    assert again.status_code == 201
+    assert user_client.get(f"/api/invoices/{invoice['id']}").json()[
+        "delivery_note_number"] == again.json()["number"]
+
+
+def test_deleting_an_invoice_keeps_its_delivery_note(user_client):
+    """Die Rechnung ist Herkunft, nicht Besitzer: der Lieferschein bleibt und
+    verliert nur den Verweis (sonst scheitert das Löschen an der Fremdschlüssel-
+    Beziehung)."""
+    invoice = make_invoice(user_client)
+    dn = user_client.post(
+        f"/api/invoices/{invoice['id']}/convert-to-delivery-note").json()
+    assert user_client.delete(f"/api/invoices/{invoice['id']}").status_code == 204
+
+    left = user_client.get(f"/api/delivery-notes/{dn['id']}").json()
+    assert left["number"] == dn["number"]
+    assert left["source_invoice_id"] is None
+
+
+def test_delivery_note_converts_to_only_one_quote(user_client):
+    dn = user_client.post("/api/delivery-notes", json=NOTE).json()
+    first = user_client.post(f"/api/delivery-notes/{dn['id']}/convert-to-quote").json()
+
+    second = user_client.post(f"/api/delivery-notes/{dn['id']}/convert-to-quote")
+    assert second.status_code == 400
+    assert first["number"] in second.json()["detail"]
+    assert len(user_client.get("/api/quotes").json()) == 1
+
+    listed = user_client.get("/api/delivery-notes").json()[0]
+    assert listed["converted_quote_number"] == first["number"]
+    assert user_client.get("/api/quotes").json()[0]["source_delivery_note_id"] == dn["id"]
+
+
+def test_quote_converts_to_only_one_invoice(user_client):
+    quote = user_client.post("/api/quotes", json=QUOTE).json()
+    invoice = user_client.post(f"/api/quotes/{quote['id']}/convert").json()
+
+    second = user_client.post(f"/api/quotes/{quote['id']}/convert")
+    assert second.status_code == 400
+    assert invoice["number"] in second.json()["detail"]
+    assert len(user_client.get("/api/invoices").json()) == 1
+
+    listed = user_client.get("/api/quotes").json()[0]
+    assert listed["converted_invoice_number"] == invoice["number"]
+
+
 def test_cancelled_delivery_note_cannot_be_converted(user_client):
     dn = user_client.post("/api/delivery-notes", json={
         "customer_name": "Storno GmbH",

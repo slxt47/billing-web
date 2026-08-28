@@ -59,6 +59,30 @@ class Invoice(Base):
         order_by="InvoiceItem.id",
     )
 
+    # Lieferscheine, die aus dieser Rechnung entstanden sind. Gibt es einen,
+    # lehnt die API eine zweite Umwandlung ab (keine Dubletten). selectin
+    # statt lazy: eine Zusatzabfrage je Liste, nicht je Zeile.
+    delivery_notes = relationship(
+        "DeliveryNote",
+        back_populates="source_invoice",
+        order_by="DeliveryNote.id",
+        lazy="selectin",
+    )
+
+    @property
+    def delivery_note_number(self):
+        """Nummer des bereits erzeugten Lieferscheins, sonst None."""
+        return self.delivery_notes[0].number if self.delivery_notes else None
+
+    # Gutschriften zu dieser Rechnung. Anders als der Lieferschein darf es
+    # mehrere geben: eine Rechnung kann in Teilen gutgeschrieben werden.
+    credit_notes = relationship(
+        "CreditNote",
+        back_populates="invoice",
+        order_by="CreditNote.id",
+        lazy="selectin",
+    )
+
     # --- berechnete Werte -------------------------------------------------
     @property
     def subtotal(self):
@@ -85,8 +109,16 @@ class Invoice(Base):
 
     # --- Zahlung / Verzug -------------------------------------------------
     @property
+    def credited_amount(self):
+        """Summe der Gutschriften zu dieser Rechnung (ohne stornierte)."""
+        return round(sum(c.total for c in self.credit_notes
+                         if c.status != CN_CANCELLED), 2)
+
+    @property
     def remaining(self):
-        return round(self.total - float(self.paid_amount or 0), 2)
+        """Offener Betrag: Gesamt minus Zahlungen minus Gutschriften."""
+        return round(self.total - float(self.paid_amount or 0)
+                     - self.credited_amount, 2)
 
     @property
     def is_overdue(self):
@@ -264,6 +296,10 @@ class Quote(Base):
     status = Column(String(20), nullable=False, default=QUOTE_OPEN)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     converted_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    # Herkunft: aus diesem Lieferschein entstanden (verhindert, dass derselbe
+    # Lieferschein zweimal zu einem Angebot wird).
+    source_delivery_note_id = Column(Integer, ForeignKey("delivery_notes.id"),
+                                     nullable=True)
 
     items = relationship(
         "QuoteItem",
@@ -271,6 +307,16 @@ class Quote(Base):
         cascade="all, delete-orphan",
         order_by="QuoteItem.id",
     )
+
+    converted_invoice = relationship("Invoice", lazy="selectin")
+    source_delivery_note = relationship("DeliveryNote",
+                                        back_populates="converted_quotes",
+                                        lazy="selectin")
+
+    @property
+    def converted_invoice_number(self):
+        """Nummer der Rechnung, in die dieses Angebot umgewandelt wurde."""
+        return self.converted_invoice.number if self.converted_invoice else None
 
     @property
     def subtotal(self):
@@ -345,6 +391,19 @@ class DeliveryNote(Base):
         order_by="DeliveryNoteItem.id",
     )
 
+    source_invoice = relationship("Invoice", back_populates="delivery_notes")
+    converted_quotes = relationship(
+        "Quote",
+        back_populates="source_delivery_note",
+        order_by="Quote.id",
+        lazy="selectin",
+    )
+
+    @property
+    def converted_quote_number(self):
+        """Nummer des bereits erzeugten Angebots, sonst None."""
+        return self.converted_quotes[0].number if self.converted_quotes else None
+
 
 class DeliveryNoteItem(Base):
     __tablename__ = "delivery_note_items"
@@ -356,3 +415,107 @@ class DeliveryNoteItem(Base):
     quantity = Column(Numeric(10, 2), nullable=False, default=1)
 
     delivery_note = relationship("DeliveryNote", back_populates="items")
+
+
+# --------------------------- Gutschriften --------------------------------
+# Eigene Belegart (GS-JJJJ-NNNN) statt "nur Storno": eine Rechnung kann ganz
+# oder in Teilen gutgeschrieben werden, mehrfach, und jede Gutschrift ist ein
+# eigener Beleg mit Nummer, PDF und E-Mail-Versand.
+CN_OPEN = "offen"          # ausgestellt, noch nicht erstattet/verrechnet
+CN_SETTLED = "erstattet"   # ausgezahlt oder verrechnet
+CN_CANCELLED = "storniert"  # zurückgenommen, zählt nirgends mehr mit
+
+
+class CreditNote(Base):
+    """Gutschrift – optional zu einer Rechnung, sonst freistehend."""
+    __tablename__ = "credit_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    number = Column(String(32), unique=True, nullable=False, index=True)
+
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+
+    customer_name = Column(String(200), nullable=False)
+    customer_address = Column(Text, default="")
+    customer_contact_person = Column(String(200), default="")
+
+    issue_date = Column(Date, nullable=False, default=date.today)
+    reason = Column(Text, default="")
+
+    tax_rate = Column(Numeric(5, 2), nullable=False, default=20)
+    small_business = Column(Boolean, nullable=False, default=False)
+
+    status = Column(String(20), nullable=False, default=CN_OPEN)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    items = relationship(
+        "CreditNoteItem",
+        back_populates="credit_note",
+        cascade="all, delete-orphan",
+        order_by="CreditNoteItem.id",
+    )
+    invoice = relationship("Invoice", back_populates="credit_notes")
+
+    @property
+    def invoice_number(self):
+        return self.invoice.number if self.invoice else None
+
+    @property
+    def subtotal(self):
+        return round(sum((it.line_total for it in self.items), 0), 2)
+
+    @property
+    def net(self):
+        return self.subtotal
+
+    @property
+    def tax_amount(self):
+        if self.small_business:
+            return 0.0
+        return round(self.net * float(self.tax_rate) / 100, 2)
+
+    @property
+    def total(self):
+        return round(self.net + self.tax_amount, 2)
+
+
+class CreditNoteItem(Base):
+    __tablename__ = "credit_note_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    credit_note_id = Column(Integer, ForeignKey("credit_notes.id"), nullable=False)
+
+    description = Column(String(300), nullable=False)
+    quantity = Column(Numeric(10, 2), nullable=False, default=1)
+    unit_price = Column(Numeric(12, 2), nullable=False, default=0)
+
+    credit_note = relationship("CreditNote", back_populates="items")
+
+    @property
+    def line_total(self):
+        return round(float(self.quantity) * float(self.unit_price), 2)
+
+
+# --------------------------- PDF-Vorlagen --------------------------------
+class PdfTemplate(Base):
+    """Aussehen der erzeugten PDFs. Eine Vorlage ist die Vorgabe
+    (is_default); beim Download lässt sich eine andere wählen. Die Werte
+    entsprechen pdf.DEFAULTS – eine leere Vorlage sieht aus wie bisher."""
+    __tablename__ = "pdf_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(80), unique=True, nullable=False)
+
+    accent_color = Column(String(7), nullable=False, default="#2d6cdf")
+    header_color = Column(String(7), nullable=False, default="#2d3748")
+    font_family = Column(String(20), nullable=False, default="Helvetica")
+    font_size = Column(Numeric(4, 1), nullable=False, default=10)
+
+    header_note = Column(Text, default="")
+    footer_text = Column(Text, default="")
+
+    show_logo = Column(Boolean, nullable=False, default=True)
+    show_qr = Column(Boolean, nullable=False, default=True)
+
+    is_default = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

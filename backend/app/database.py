@@ -64,6 +64,7 @@ _MIGRATIONS = [
     "ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact_person VARCHAR(200) DEFAULT ''",
     "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_contact_person VARCHAR(200) DEFAULT ''",
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_contact_person VARCHAR(200) DEFAULT ''",
+    "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS source_delivery_note_id INTEGER",
 ]
 
 

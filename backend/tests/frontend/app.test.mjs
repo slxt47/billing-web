@@ -111,6 +111,8 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
       "/api/settings": { company_name: "", has_logo: false },
       "/api/users": [{ id: 1, username: "admin", is_admin: true }],
       "/api/audit-log": [],
+      "/api/pdf-templates": [],
+      "/api/credit-notes": [],
       "/api/admin/backups": [],
       ...routes,
     };
@@ -763,6 +765,444 @@ test("Die Dateiauswahl selbst ist nicht sichtbar", async () => {
   assert.equal(window.document.querySelector("#customer-import-file").hidden, true);
 });
 
+// -------------------------------- Gutschriften
+const CREDIT_ROW = {
+  id: 4, number: "GS-2026-0004", customer_name: "Alpha AG", invoice_id: 3,
+  invoice_number: "RE-2026-0003", issue_date: "2026-02-10", total: 120,
+  status: "offen", reason: "Kulanz", tax_rate: 20, small_business: false,
+  customer_address: "", customer_contact_person: "", items: [],
+};
+
+test("Die Gutschriftenliste zeigt Beleg, Rechnung und Betrag", async () => {
+  const { window } = startApp({ routes: { "/api/credit-notes": [CREDIT_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-credit").click();
+  await settle();
+
+  const cells = [...window.document.querySelectorAll("#credit-body tr td")]
+    .map((td) => td.textContent.trim());
+  assert.ok(cells.includes("GS-2026-0004"));
+  assert.ok(cells.includes("RE-2026-0003"), "die zugehörige Rechnung steht dabei");
+  const badge = window.document.querySelector("#credit-body .badge");
+  assert.equal(badge.textContent, "offen");
+});
+
+test("„Gutschrift“ an der Rechnung übernimmt Kunde und Positionen", async () => {
+  const invoice = {
+    ...INVOICE_ROW, status: "offen", remaining: 240, total: 240,
+    customer_address: "Alphaweg 1", customer_contact_person: "Frau Alpha",
+    tax_rate: 20, small_business: false, discount_percent: 0,
+    items: [{ id: 1, description: "Beratung", quantity: 2, unit_price: 100 }],
+  };
+  const { window } = startApp({ routes: { "/api/invoices": [invoice] } });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  window.document.querySelector("#history-body button[data-act=credit]").click();
+  await settle();
+
+  assert.equal(window.document.querySelector("#view-credit").hidden, false,
+               "die Gutschrift-Ansicht ist offen");
+  const form = window.document.querySelector("#credit-form");
+  assert.equal(form.customer_name.value, "Alpha AG");
+  assert.equal(form.invoice_id.value, "3");
+  assert.equal(window.document.querySelector("#credit-items-body .ci-desc").value,
+               "Beratung");
+  assert.equal(window.document.querySelector("#credit-items-body .ci-price").value, "100");
+  assert.match(window.document.querySelector("#credit-invoice-hint").textContent,
+               /RE-2026-0003/);
+});
+
+test("Der Rabatt der Rechnung steckt im Einzelpreis der Gutschrift", async () => {
+  const invoice = {
+    ...INVOICE_ROW, status: "offen", remaining: 216, total: 216, discount_percent: 10,
+    tax_rate: 20, items: [{ id: 1, description: "Beratung", quantity: 2, unit_price: 100 }],
+  };
+  const { window } = startApp({ routes: { "/api/invoices": [invoice] } });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+  window.document.querySelector("#history-body button[data-act=credit]").click();
+  await settle();
+
+  assert.equal(window.document.querySelector("#credit-items-body .ci-price").value, "90");
+});
+
+test("Eine bezahlte Rechnung ohne offenen Betrag bietet keine Gutschrift an", async () => {
+  const { window } = startApp({
+    routes: { "/api/invoices": [{ ...INVOICE_ROW, status: "bezahlt", remaining: 0 }] },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+  assert.equal(window.document.querySelector("#history-body button[data-act=credit]"), null);
+});
+
+test("Eine Gutschrift wird mit ihren Positionen abgeschickt", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/credit-notes": (o) => (o.method === "POST" ? CREDIT_ROW : []) },
+  });
+  await settle();
+  window.document.querySelector("#nav-credit").click();
+  await settle();
+
+  const form = window.document.querySelector("#credit-form");
+  form.customer_name.value = "Alpha AG";
+  form.reason.value = "Ware beschädigt";
+  const row = window.document.querySelector("#credit-items-body tr");
+  row.querySelector(".ci-desc").value = "Rückgabe";
+  row.querySelector(".ci-qty").value = "1";
+  row.querySelector(".ci-price").value = "100";
+  form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await settle(50);
+
+  const post = requests.find((r) => r.url === "/api/credit-notes" && r.options.method === "POST");
+  assert.ok(post, "POST /api/credit-notes");
+  const body = JSON.parse(post.options.body);
+  assert.equal(body.customer_name, "Alpha AG");
+  assert.equal(body.reason, "Ware beschädigt");
+  assert.deepEqual(body.items, [{ description: "Rückgabe", quantity: 1, unit_price: 100 }]);
+  assert.match(window.document.querySelector("#credit-msg").textContent, /GS-2026-0004/);
+});
+
+test("Erstattet und stornieren setzen den Status", async () => {
+  const { window, requests } = startApp({ routes: { "/api/credit-notes": [CREDIT_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-credit").click();
+  await settle();
+
+  window.document.querySelector("#credit-body button[data-act=settle]").click();
+  await settle(30);
+  const patch = requests.find((r) => r.url === "/api/credit-notes/4/status");
+  assert.equal(JSON.parse(patch.options.body).status, "erstattet");
+});
+
+// -------------------------------- Auswertungen
+const VAT_REPORT = {
+  from: "2026-01-01", to: "2026-12-31",
+  rows: [{ tax_rate: 20, net: 200, tax: 40, gross: 240, invoice_count: 2,
+           credit_note_count: 1 }],
+  net_total: 200, tax_total: 40, gross_total: 240, input_tax_known: false,
+};
+const REVENUE_REPORT = {
+  from: "2026-01-01", to: "2026-12-31",
+  months: [{ label: "01/2026", key: "2026-01", invoiced_net: 250, credited_net: 50,
+             net: 200, gross: 240 }],
+  customers: [{ customer_name: "Alpha AG", invoiced_net: 250, credited_net: 50,
+                net: 200, gross: 240, invoice_count: 2 }],
+  invoiced_net: 250, credited_net: 50, net: 200, gross: 240, paid: 100,
+  open_amount: 140, invoice_count: 2, credit_note_count: 1, expenses_tracked: false,
+};
+
+test("Die Auswertung zeigt Umsatzsteuer und Erlöse", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+
+  // Ohne eigene Wahl gilt das laufende Jahr.
+  const year = new Date().getFullYear();
+  assert.equal(window.document.querySelector("#report-from").value, `${year}-01-01`);
+  assert.ok(requests.some((r) => r.url.startsWith("/api/reports/vat?from=")));
+
+  const vatRow = window.document.querySelector("#vat-body tr").textContent;
+  assert.match(vatRow, /20/);
+  assert.match(window.document.querySelector("#vat-total").textContent, /Summe/);
+
+  const kpis = window.document.querySelector("#revenue-kpis").textContent;
+  assert.match(kpis, /Erlös netto/);
+  assert.match(window.document.querySelector("#revenue-month-body").textContent, /01\/2026/);
+  assert.match(window.document.querySelector("#revenue-customer-body").textContent, /Alpha AG/);
+});
+
+test("Der Zeitraum wandert in den CSV-Export", async () => {
+  const { window } = startApp({
+    routes: { "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#report-from").value = "2026-03-01";
+  window.document.querySelector("#report-to").value = "2026-03-31";
+  window.document.querySelector("#vat-csv").click();
+
+  assert.equal(downloads.length, 1);
+  assert.match(downloads[0].href, /^\/api\/reports\/vat\.csv\?/);
+  assert.match(downloads[0].href, /from=2026-03-01/);
+  assert.match(downloads[0].href, /to=2026-03-31/);
+});
+
+// -------------------------------- Monitoring
+const METRICS = {
+  uptime_seconds: 3600, requests_total: 120,
+  responses: { "2xx": 110, "3xx": 2, "4xx": 7, "5xx": 1 },
+  server_errors_total: 1, error_rate: 0.0083, slow_requests_total: 0,
+  avg_response_seconds: 0.012, max_response_seconds: 0.4,
+  errors_in_window: 1, failed_logins_in_window: 2, alert_window_seconds: 300,
+  recent_errors: [{ at: "2026-08-28T10:00:00", method: "GET", path: "/api/kaputt",
+                    status: 500, request_id: "abc123" }],
+  backup_age_hours: 5,
+  alerts: { enabled: true, error_threshold: 10, login_threshold: 20,
+            backup_max_age_hours: 36, cooldown_seconds: 3600, last_sent: {} },
+  documents: { invoices: 3, quotes: 1, delivery_notes: 2, credit_notes: 1,
+               customers: 4, users: 2 },
+};
+
+test("Monitoring zeigt Kennzahlen, Alarmlage und die letzten Fehler", async () => {
+  const { window } = startApp({ routes: { "/api/admin/metrics": METRICS } });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  const kpis = window.document.querySelector("#monitoring-kpis").textContent;
+  assert.match(kpis, /Laufzeit/);
+  assert.match(kpis, /120/);                       // Requests
+  assert.match(window.document.querySelector("#monitoring-documents").textContent,
+               /Gutschriften/);
+  assert.match(window.document.querySelector("#monitoring-alerts").textContent,
+               /aktiv/);
+  assert.match(window.document.querySelector("#monitoring-errors-body").textContent,
+               /\/api\/kaputt/);
+  assert.equal(window.document.querySelector("#monitoring-noerrors").hidden, true);
+});
+
+test("Ohne Alarme sagt die Ansicht das ausdrücklich", async () => {
+  const { window } = startApp({
+    routes: { "/api/admin/metrics": { ...METRICS, recent_errors: [],
+                                      alerts: { ...METRICS.alerts, enabled: false } } },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  assert.match(window.document.querySelector("#monitoring-alerts").textContent,
+               /abgeschaltet/);
+  assert.equal(window.document.querySelector("#monitoring-noerrors").hidden, false);
+});
+
+test("Der Probealarm meldet, wohin er ging", async () => {
+  const { window } = startApp({
+    routes: { "/api/admin/metrics": METRICS,
+              "/api/admin/metrics/test-alert": { sent: true, to: "buero@muster.example" } },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  window.document.querySelector("#monitoring-test-alert").click();
+  await settle(50);
+  assert.match(window.document.querySelector("#monitoring-msg").textContent,
+               /buero@muster\.example/);
+});
+
+test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async () => {
+  const { window } = startApp();
+  await settle();
+  // Kein Admin -> Monitoring ist ausgeblendet, Gutschriften sind für alle da.
+  assert.equal(window.document.querySelector("#nav-credit").hidden, false);
+  assert.equal(window.document.querySelector("#nav-reports").hidden, false);
+});
+
+// -------------------------------- PDF-Vorlagen
+const TEMPLATES = [
+  { id: 1, name: "Standard", accent_color: "#2d6cdf", header_color: "#2d3748",
+    font_family: "Helvetica", font_size: 10, header_note: "", footer_text: "",
+    show_logo: true, show_qr: true, is_default: true },
+  { id: 2, name: "Grün", accent_color: "#2f9e44", header_color: "#1f2733",
+    font_family: "Times", font_size: 11, header_note: "", footer_text: "",
+    show_logo: true, show_qr: false, is_default: false },
+];
+
+test("Die Vorlagenliste steht in den Firmendaten", async () => {
+  const { window } = startApp({ routes: { "/api/pdf-templates": TEMPLATES } });
+  await settle();
+  window.document.querySelector("#nav-settings").click();
+  await settle(50);
+
+  const rows = [...window.document.querySelectorAll("#template-body tr")];
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /Standard/);
+  assert.match(rows[0].textContent, /Vorgabe/);
+  assert.ok(rows[0].querySelector("a[href='/api/pdf-templates/1/preview']"),
+            "Vorschau-Link je Vorlage");
+  assert.equal(rows[0].querySelector("button[data-act=default]"), null,
+               "die Vorgabe braucht den Knopf nicht");
+  assert.ok(rows[1].querySelector("button[data-act=default]"));
+});
+
+test("Eine Vorlage lässt sich anlegen", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/pdf-templates": (o) => (o.method === "POST" ? TEMPLATES[1] : []) },
+  });
+  await settle();
+  window.document.querySelector("#nav-settings").click();
+  await settle(50);
+
+  const form = window.document.querySelector("#template-form");
+  form.name.value = "Grün";
+  form.font_family.value = "Times";
+  form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await settle(50);
+
+  const post = requests.find((r) => r.url === "/api/pdf-templates" && r.options.method === "POST");
+  const body = JSON.parse(post.options.body);
+  assert.equal(body.name, "Grün");
+  assert.equal(body.font_family, "Times");
+  assert.equal(body.accent_color, "#2d6cdf");
+  assert.equal(body.show_qr, true);
+});
+
+test("Ab zwei Vorlagen fragt der PDF-Download nach der Vorlage", async () => {
+  const { window } = startApp({
+    routes: { "/api/pdf-templates": TEMPLATES,
+              "/api/invoices": [INVOICE_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const link = window.document.querySelector("#history-body a[data-act=pdf]");
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  const menu = window.document.querySelector("#pdf-template-menu");
+  assert.equal(menu.hidden, false, "das Auswahlfenster ist offen");
+  assert.deepEqual([...menu.querySelectorAll("button")].map((b) => b.textContent),
+                   ["Vorgabe", "Standard", "Grün"]);
+});
+
+test("Die gewählte Vorlage hängt am Download", async () => {
+  const { window } = startApp({
+    routes: { "/api/pdf-templates": TEMPLATES, "/api/invoices": [INVOICE_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#history-body a[data-act=pdf]")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  const menu = window.document.querySelector("#pdf-template-menu");
+  [...menu.querySelectorAll("button")].find((b) => b.textContent === "Grün").click();
+
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].href, "/api/invoices/3/pdf?template=2");
+  assert.equal(menu.hidden, true, "danach ist das Fenster wieder zu");
+});
+
+test("Mit höchstens einer Vorlage lädt der Link direkt herunter", async () => {
+  const { window } = startApp({
+    routes: { "/api/pdf-templates": [TEMPLATES[0]], "/api/invoices": [INVOICE_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const link = window.document.querySelector("#history-body a[data-act=pdf]");
+  const event = new window.MouseEvent("click", { bubbles: true, cancelable: true });
+  window.document.addEventListener("click", (e) => e.preventDefault(), true);
+  link.dispatchEvent(event);
+  assert.equal(window.document.querySelector("#pdf-template-menu").hidden, true);
+});
+
+// -------------------------------- Keine Umwandlung doppelt
+const INVOICE_ROW = {
+  id: 3, number: "RE-2026-0003", customer_name: "Alpha AG", issue_date: "2026-01-10",
+  total: 100, remaining: 0, status: "bezahlt", is_overdue: false, items: [],
+};
+
+test("Eine Rechnung mit Lieferschein bietet keine zweite Umwandlung an", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/invoices": [{ ...INVOICE_ROW, delivery_note_number: "LS-2026-0003" }],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const row = window.document.querySelector("#history-body tr");
+  assert.equal(row.querySelector("button[data-act=to-delivery]"), null,
+               "kein Knopf „Lieferschein“ mehr");
+  const marker = row.querySelector(".converted-marker");
+  assert.ok(marker, "stattdessen der Verweis auf den vorhandenen Beleg");
+  assert.match(marker.textContent, /LS-2026-0003/);
+});
+
+test("Ohne Lieferschein bleibt der Knopf an der Rechnung", async () => {
+  const { window } = startApp({ routes: { "/api/invoices": [INVOICE_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const row = window.document.querySelector("#history-body tr");
+  assert.ok(row.querySelector("button[data-act=to-delivery]"));
+  assert.equal(row.querySelector(".converted-marker"), null);
+});
+
+test("Ein bereits umgewandelter Lieferschein bietet „zu Angebot“ nicht mehr an", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/delivery-notes": [
+        { id: 5, number: "LS-2026-0005", customer_name: "Alpha AG",
+          issue_date: "2026-02-01", status: "abgeschlossen", items: [],
+          converted_quote_number: "AN-2026-0005" },
+      ],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  const row = window.document.querySelector("#delivery-body tr");
+  assert.equal(row.querySelector("button[data-act=to-quote]"), null);
+  assert.match(row.querySelector(".converted-marker").textContent, /AN-2026-0005/);
+});
+
+test("Ein umgewandeltes Angebot zeigt die Rechnungsnummer statt des Knopfs", async () => {
+  const { window } = startApp({
+    quotes: [{ id: 1, number: "AN-2026-0001", customer_name: "Alpha AG",
+               issue_date: "2026-01-05", total: 500, status: "umgewandelt",
+               converted_invoice_number: "RE-2026-0001", items: [] }],
+  });
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+
+  const row = window.document.querySelector("#quotes-body tr");
+  assert.equal(row.querySelector("button[data-act=convert]"), null);
+  assert.match(row.querySelector(".converted-marker").textContent, /RE-2026-0001/);
+});
+
+test("Weist der Server die zweite Umwandlung ab, sagt die App das", async () => {
+  const { window } = startApp({
+    routes: { "/api/delivery-notes": [DN_OPEN_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  // Der Knopf ist da (der Server kennt die Dublette, das Frontend hier nicht):
+  // die Fehlermeldung des Servers muss beim Benutzer ankommen.
+  const messages = [];
+  window.alert = (text) => messages.push(text);
+  window.fetch = async () => ({
+    ok: false, status: 400, headers: new Headers(), clone() { return this; },
+    json: async () => ({ detail: "Aus diesem Lieferschein wurde bereits das Angebot AN-2026-0005 erstellt" }),
+  });
+
+  window.document.querySelector("#delivery-body button[data-act=to-quote]").click();
+  await settle(50);
+
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /AN-2026-0005/);
+  assert.equal(window.document.querySelector("#view-quotes").hidden, true,
+               "und es wird nicht in die Angebotsansicht gewechselt");
+});
+
 // -------------------------------- Beispieldatei: CSV oder JSON
 /**
  * Fängt die Downloads eines Fensters ab. jsdom kennt weder
@@ -781,7 +1221,8 @@ function captureDownloads(window) {
   window.URL.createObjectURL = () => "blob:test";
   window.URL.revokeObjectURL = () => {};
   window.HTMLAnchorElement.prototype.click = function () {
-    if (this.download) downloads.push({ name: this.download, content: lastContent });
+    downloads.push({ name: this.download, href: this.getAttribute("href"),
+                     content: lastContent });
   };
   return downloads;
 }

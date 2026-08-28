@@ -16,12 +16,15 @@
       <button id="nav-quotes">Angebote</button>
       <button id="nav-delivery">Lieferscheine</button>
       <button id="nav-history">Rechnungsübersicht</button>
+      <button id="nav-credit">Gutschriften</button>
+      <button id="nav-reports">Auswertungen</button>
       <button id="nav-customers">Kunden</button>
       <button id="nav-products">Artikel</button>
       <button id="nav-settings" hidden>Firma</button>
       <button id="nav-users" hidden>Benutzer</button>
       <button id="nav-audit" hidden>Audit-Log</button>
       <button id="nav-backup" hidden>Backup</button>
+      <button id="nav-monitoring" hidden>Monitoring</button>
       <button id="theme-toggle" class="icon-btn" title="Hell/Dunkel umschalten">🌙</button>
       <span class="nav-user">👤 <span id="current-user">…</span></span>
       <a id="logout" href="/logout" title="Abmelden">Abmelden</a>
@@ -339,6 +342,169 @@
       <p id="history-empty" hidden>Keine Rechnungen gefunden.</p>
     </section>
 
+    <!-- ============ GUTSCHRIFTEN ============ -->
+    <section id="view-credit" hidden>
+      <h2 id="credit-form-title">Neue Gutschrift erstellen</h2>
+      <p class="hint">Eine Gutschrift ist ein eigener Beleg (GS-Nummer). Sie mindert
+        den offenen Betrag der zugehörigen Rechnung – ganz oder in Teilen. Über
+        „Gutschrift“ in der Rechnungsübersicht kommen die Positionen der Rechnung
+        gleich mit.</p>
+      <form id="credit-form">
+        <input type="hidden" name="credit_id" value="">
+        <input type="hidden" name="invoice_id" value="">
+        <p id="credit-invoice-hint" class="hint" hidden></p>
+        <label>Gespeicherter Kunde
+          <span class="picker">
+            <input type="search" id="credit-customer-search" class="picker-search"
+                   placeholder="🔎 Kunde suchen (Name, E-Mail, Ansprechpartner)…" autocomplete="off">
+            <select id="credit-customer-select">
+              <option value="">– neuen Kunden eingeben –</option>
+            </select>
+          </span>
+        </label>
+        <div class="grid">
+          <label>Kundenname *
+            <input type="text" name="customer_name" required>
+          </label>
+          <label>Ansprechpartner
+            <input type="text" name="customer_contact_person" placeholder="z. B. Frau Müller">
+          </label>
+          <label>MwSt.-Satz (%)
+            <input type="number" name="tax_rate" value="20" min="0" max="100" step="0.1">
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="small_business"> Kleinunternehmer (§19 UStG)
+          </label>
+        </div>
+        <label>Kundenadresse
+          <textarea name="customer_address" rows="3" placeholder="Straße, PLZ Ort"></textarea>
+        </label>
+
+        <h3>Gutgeschriebene Positionen</h3>
+        <datalist id="credit-product-list"></datalist>
+        <table id="credit-items-table">
+          <thead>
+            <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis</th><th></th></tr>
+          </thead>
+          <tbody id="credit-items-body"></tbody>
+        </table>
+        <button type="button" id="credit-add-item" class="secondary">+ Position</button>
+
+        <label>Grund
+          <textarea name="reason" rows="2" placeholder="z. B. Ware beschädigt, Kulanz"></textarea>
+        </label>
+
+        <button type="submit" class="primary" id="credit-submit">Gutschrift speichern</button>
+        <button type="button" class="secondary" id="credit-cancel-edit" hidden>Abbrechen</button>
+        <span id="credit-msg"></span>
+      </form>
+
+      <h3>Gutschriften</h3>
+      <div class="bar">
+        <input type="search" id="credit-search" class="grow" placeholder="Suche nach Nummer oder Kunde…">
+        <select id="credit-filter-status">
+          <option value="">Alle Status</option>
+          <option value="offen">offen</option>
+          <option value="erstattet">erstattet</option>
+          <option value="storniert">storniert</option>
+        </select>
+      </div>
+      <div class="table-scroll">
+        <table id="credit-table">
+          <thead>
+            <tr><th>Nummer</th><th>Kunde</th><th>Zur Rechnung</th><th>Datum</th>
+                <th class="col-num">Betrag</th><th>Status</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="credit-body"></tbody>
+        </table>
+      </div>
+      <p id="credit-empty" hidden>Noch keine Gutschriften erstellt.</p>
+      <p id="credit-nomatch" hidden>Keine Gutschriften passen zur Suche.</p>
+    </section>
+
+    <!-- ============ AUSWERTUNGEN ============ -->
+    <section id="view-reports" hidden>
+      <h2>Auswertungen</h2>
+      <p class="hint">Gerechnet wird nach Rechnungsdatum (Soll-Versteuerung), ohne
+        stornierte Belege; Gutschriften werden abgezogen.</p>
+      <div class="bar">
+        <label class="inline">Von <input type="date" id="report-from"></label>
+        <label class="inline">Bis <input type="date" id="report-to"></label>
+        <button type="button" id="report-refresh" class="secondary">🔄 Aktualisieren</button>
+        <button type="button" id="report-year" class="secondary">Dieses Jahr</button>
+      </div>
+
+      <h3>Umsatzsteuer (UStVA-Grundlage)</h3>
+      <div class="table-scroll">
+        <table id="vat-table">
+          <thead>
+            <tr><th>Steuersatz</th><th class="col-num">Netto</th><th class="col-num">Umsatzsteuer</th>
+                <th class="col-num">Brutto</th><th class="col-num">Rechnungen</th>
+                <th class="col-num">Gutschriften</th></tr>
+          </thead>
+          <tbody id="vat-body"></tbody>
+          <tfoot><tr id="vat-total"></tr></tfoot>
+        </table>
+      </div>
+      <p class="hint">Vorsteuer ist nicht enthalten: Ausgaben erfasst diese App nicht.</p>
+      <button type="button" id="vat-csv" class="secondary">⬇️ UStVA als CSV</button>
+
+      <h3>Erlöse</h3>
+      <div class="kpi-grid" id="revenue-kpis"></div>
+      <div class="table-scroll">
+        <table id="revenue-month-table">
+          <thead>
+            <tr><th>Monat</th><th class="col-num">Berechnet netto</th>
+                <th class="col-num">Gutschriften netto</th><th class="col-num">Erlös netto</th>
+                <th class="col-num">Erlös brutto</th></tr>
+          </thead>
+          <tbody id="revenue-month-body"></tbody>
+        </table>
+      </div>
+      <h4>Nach Kunde</h4>
+      <div class="table-scroll">
+        <table id="revenue-customer-table">
+          <thead>
+            <tr><th>Kunde</th><th class="col-num">Erlös netto</th>
+                <th class="col-num">Gutschriften netto</th><th class="col-num">Rechnungen</th></tr>
+          </thead>
+          <tbody id="revenue-customer-body"></tbody>
+        </table>
+      </div>
+      <p class="hint">Erlösseite ohne Ausgaben – ein vollständiges Betriebsergebnis
+        (Gewinn und Verlust) ist damit noch nicht möglich, weil die App keine
+        Ausgaben kennt.</p>
+      <button type="button" id="revenue-csv" class="secondary">⬇️ Erlöse als CSV</button>
+    </section>
+
+    <!-- ============ MONITORING (nur Admin) ============ -->
+    <section id="view-monitoring" hidden>
+      <h2>Monitoring</h2>
+      <p class="hint">Kennzahlen des laufenden Prozesses. Sie liegen im Speicher
+        dieses Containers und beginnen bei jedem Neustart von vorn.</p>
+      <div class="bar">
+        <button type="button" id="monitoring-refresh" class="secondary">🔄 Aktualisieren</button>
+        <button type="button" id="monitoring-prom" class="secondary">⬇️ Prometheus-Format</button>
+        <button type="button" id="monitoring-test-alert" class="secondary">✉️ Probealarm senden</button>
+        <span id="monitoring-msg"></span>
+      </div>
+      <div class="kpi-grid" id="monitoring-kpis"></div>
+      <h3>Alarme</h3>
+      <p id="monitoring-alerts" class="hint"></p>
+      <h3>Letzte Serverfehler</h3>
+      <div class="table-scroll">
+        <table id="monitoring-errors-table">
+          <thead>
+            <tr><th>Zeit (UTC)</th><th>Methode</th><th>Pfad</th><th>Status</th><th>Request-ID</th></tr>
+          </thead>
+          <tbody id="monitoring-errors-body"></tbody>
+        </table>
+      </div>
+      <p id="monitoring-noerrors" class="hint" hidden>Keine Serverfehler seit dem Start.</p>
+      <h3>Bestand</h3>
+      <div class="kpi-grid" id="monitoring-documents"></div>
+    </section>
+
     <!-- ============ KUNDEN ============ -->
     <section id="view-customers" hidden>
       <h2>Stammkunden</h2>
@@ -501,6 +667,59 @@
         <span id="logo-none" class="hint">Noch kein Logo hochgeladen.</span>
         <input type="file" id="logo-input" accept="image/png,image/jpeg,image/gif">
       </div>
+
+      <h3>PDF-Vorlagen</h3>
+      <p class="hint">Bestimmen das Aussehen der PDFs: Farben, Schrift, Kopf- und
+        Fußtext, Logo und GiroCode. Eine Vorlage ist die Vorgabe; beim Download
+        lässt sich eine andere wählen. Ohne Vorlage bleibt das Standardaussehen.</p>
+      <form id="template-form">
+        <input type="hidden" name="template_id" value="">
+        <div class="grid">
+          <label>Name *
+            <input type="text" name="name" required placeholder="z. B. Standard, Grün">
+          </label>
+          <label>Schrift
+            <select name="font_family">
+              <option value="Helvetica">Helvetica</option>
+              <option value="Times">Times</option>
+              <option value="Courier">Courier</option>
+            </select>
+          </label>
+          <label>Schriftgröße (pt)
+            <input type="number" name="font_size" value="10" min="7" max="14" step="0.5">
+          </label>
+          <label>Akzentfarbe
+            <input type="color" name="accent_color" value="#2d6cdf">
+          </label>
+          <label>Kopffarbe
+            <input type="color" name="header_color" value="#2d3748">
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="show_logo" checked> Logo anzeigen
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="show_qr" checked> GiroCode anzeigen
+          </label>
+        </div>
+        <label>Kopftext (über dem Belegtitel)
+          <textarea name="header_note" rows="2" placeholder="optional"></textarea>
+        </label>
+        <label>Fußtext (ersetzt Bankverbindung/Steuernummer)
+          <textarea name="footer_text" rows="2" placeholder="optional"></textarea>
+        </label>
+        <button type="submit" class="primary" id="template-submit">Vorlage speichern</button>
+        <button type="button" class="secondary" id="template-cancel-edit" hidden>Abbrechen</button>
+        <span id="template-msg"></span>
+      </form>
+      <div class="table-scroll">
+        <table id="template-table">
+          <thead>
+            <tr><th>Name</th><th>Schrift</th><th>Farben</th><th>Vorgabe</th><th>Aktionen</th></tr>
+          </thead>
+          <tbody id="template-body"></tbody>
+        </table>
+      </div>
+      <p id="template-empty" hidden>Noch keine Vorlage – die PDFs sehen im Standard aus.</p>
     </section>
 
     <!-- ============ BENUTZER (nur Admin) ============ -->

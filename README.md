@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (161 Backend- + 51 Frontend-Tests) with CI are
+and an automated test suite (211 Backend- + 73 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -73,8 +73,44 @@ code and `TODO.md` first.
   Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot"): Menge
   und Beschreibung kommen aus der Lieferung, die Preise – soweit die Position im
   Artikelstamm steht – aus den Standardpreisen, sonst 0 zum Nachtragen.
+- **Keine doppelten Umwandlungen** — jeder Beleg lässt sich nur einmal
+  umwandeln: aus einem Angebot entsteht genau eine Rechnung, aus einer
+  Rechnung genau ein Lieferschein, aus einem Lieferschein genau ein Angebot.
+  Gibt es den Folgebeleg schon, steht in der Liste statt des Knopfes dessen
+  Nummer (z. B. `📦 LS-2026-0007`), und die API weist einen zweiten Versuch
+  mit einem Hinweis auf den vorhandenen Beleg ab. Wird der Folgebeleg
+  gelöscht, ist die Umwandlung wieder möglich.
 - Angebote, Rechnungen und Lieferscheine teilen sich **eine fortlaufende
   Belegnummer pro Jahr**, damit eine Umwandlung die Nummer sauber weiterschiebt.
+
+### Gutschriften
+- **Gutschriften (Credit Notes)** — eigene Belegart (`GS-<Jahr>-0001`) mit
+  Positionen, MwSt., Grund, PDF und E-Mail-Versand; sie teilt sich den
+  fortlaufenden Nummernkreis mit Angebot, Rechnung und Lieferschein.
+- **Voll- oder Teilgutschrift** — „Gutschrift" in der Rechnungsübersicht
+  übernimmt Kunde und Positionen der Rechnung (Rabatt eingerechnet); einzelne
+  Zeilen lassen sich streichen oder ändern, dann wird nur der Rest
+  gutgeschrieben. Mehrere Gutschriften je Rechnung sind möglich, zusammen
+  aber höchstens der offene Betrag — mehr weist die API ab.
+- **Wirkung auf die Rechnung** — eine Gutschrift senkt den offenen Betrag
+  (`remaining = Gesamt − Zahlungen − Gutschriften`) und den Umsatz im
+  Dashboard. Der Rechnungsstatus wird dabei bewusst nicht automatisch auf
+  „bezahlt" gedreht: gutgeschrieben ist nicht dasselbe wie bezahlt.
+- **Status** — *offen*, *erstattet* oder *storniert*; eine stornierte
+  Gutschrift zählt nirgends mehr mit.
+
+### Auswertungen
+- **Umsatzsteuer (UStVA-Grundlage)** — Netto, Umsatzsteuer und Brutto je
+  Steuersatz für einen frei wählbaren Zeitraum, Gutschriften abgezogen,
+  stornierte Belege ausgenommen; Kleinunternehmer landen im 0-%-Topf.
+  Gerechnet wird nach Rechnungsdatum (Soll-Versteuerung).
+- **Erlöse** — Kennzahlen (Erlös netto/brutto, Gutschriften, bezahlt, offen)
+  sowie Aufstellungen je Monat und je Kunde.
+- **CSV-Export** — beide Auswertungen als CSV (Semikolon, deutsche
+  Dezimalkommas, BOM für Excel).
+- ⚠️ **Nur die Erlösseite** — Ausgaben erfasst die App nicht, eine
+  vollständige Gewinn-und-Verlust-Rechnung ist damit nicht möglich. Aus
+  demselben Grund weist die UStVA-Auswertung keine Vorsteuer aus.
 
 ### Kunden & Artikel
 - **Stammkunden** — häufige Kunden mit Anschrift, Ansprechpartner, E-Mail,
@@ -120,6 +156,24 @@ code and `TODO.md` first.
   weder selbst löschen noch entfernen.
 - **Firmendaten & Logo** — Absender, Steuernummer/USt-IdNr., IBAN/BIC und Logo
   erscheinen auf dem PDF (Reiter „Firma", nur Admin).
+- **Eigene PDF-Vorlagen** — beliebig viele benannte Vorlagen (Akzent- und
+  Kopffarbe, Schrift und -größe, Kopf- und Fußtext, Logo und GiroCode an/aus),
+  eine davon als Vorgabe; anlegen und ändern dürfen Admins im Reiter „Firma",
+  eine Vorschau als Musterrechnung gibt es je Vorlage. Gibt es mehr als eine,
+  fragt jeder PDF-Download in einem kleinen Fenster nach der Vorlage
+  (`?template=<id>`), sonst gilt die Vorgabe. Ohne jede Vorlage bleibt das
+  gewohnte Standardaussehen.
+- **Monitoring (nur Admin)** — Reiter „Monitoring" zeigt Laufzeit, Requests,
+  Fehlerquote, Antwortzeiten, Fehlanmeldungen, Alter des jüngsten Backups,
+  die letzten Serverfehler und den Bestand. Dieselben Zahlen liefert
+  `GET /api/admin/metrics` als JSON und `/api/admin/metrics.prom` im
+  Prometheus-Textformat. Die Zähler leben im Prozess und starten mit ihm neu.
+- **Alarm-Mails** — bei gehäuften Serverfehlern, auffällig vielen
+  Fehlanmeldungen oder einem zu alten Backup geht eine Mail an die
+  Firmen-E-Mail aus den Firmendaten. Schwellen, Beobachtungsfenster und
+  Sperrfrist stehen in `.env` (`ALERT_*`); standardmäßig sind die Mails aus
+  (`ALERTS_ENABLED=false`), `scripts/setup-prod.sh` schaltet sie ein. Ein
+  Probealarm lässt sich in der Monitoring-Ansicht auslösen.
 - **Automatische Backups** — täglicher `pg_dump` (gzip) in `./backups`, hält die
   letzten 14 Sicherungen.
 - **Backup-Verwaltung im Admin-Bereich** — vorhandene Backups auflisten,
@@ -172,7 +226,7 @@ code and `TODO.md` first.
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
 | Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
 | Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
-| Tests / CI | pytest (139 Backend-Tests) + jsdom (27 Frontend-Tests), GitHub Actions |
+| Tests / CI | pytest (211 Backend-Tests) + jsdom (73 Frontend-Tests), GitHub Actions |
 
 ## Starten
 
@@ -300,10 +354,10 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `PATCH` | `/api/invoices/{id}/status` | Status setzen (offen/bezahlt/storniert) |
 | `DELETE`| `/api/invoices/{id}` | Löschen |
 | `POST`  | `/api/invoices/{id}/payment` | Zahlungseingang (auch Teilzahlung) erfassen |
-| `GET`   | `/api/invoices/{id}/pdf` | PDF herunterladen |
+| `GET`   | `/api/invoices/{id}/pdf?template=` | PDF herunterladen (optional mit Vorlage) |
 | `POST`  | `/api/invoices/{id}/email` | Rechnung als PDF per E-Mail senden |
 | `POST`  | `/api/invoices/{id}/reminder` | Zahlungserinnerung (Mahnung) per E-Mail |
-| `POST`  | `/api/invoices/{id}/convert-to-delivery-note` | In Lieferschein umwandeln |
+| `POST`  | `/api/invoices/{id}/convert-to-delivery-note` | In Lieferschein umwandeln (nur einmal) |
 | `GET`   | `/api/export?month=JJJJ-MM` | Alle Rechnungen eines Monats als ZIP |
 
 ### Angebote
@@ -317,7 +371,45 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `DELETE`| `/api/quotes/{id}` | Löschen |
 | `GET`   | `/api/quotes/{id}/pdf` | PDF herunterladen |
 | `POST`  | `/api/quotes/{id}/email` | Per E-Mail senden |
-| `POST`  | `/api/quotes/{id}/convert` | In Rechnung umwandeln |
+| `POST`  | `/api/quotes/{id}/convert` | In Rechnung umwandeln (nur einmal) |
+
+### Gutschriften
+| Methode | Pfad | Zweck |
+|---------|------|-------|
+| `GET`   | `/api/credit-notes?search=` | Liste |
+| `POST`  | `/api/credit-notes` | Gutschrift anlegen |
+| `GET`   | `/api/credit-notes/{id}` | Einzelne Gutschrift |
+| `PUT`   | `/api/credit-notes/{id}` | Bearbeiten |
+| `PATCH` | `/api/credit-notes/{id}/status` | Status (offen/erstattet/storniert) |
+| `DELETE`| `/api/credit-notes/{id}` | Löschen |
+| `GET`   | `/api/credit-notes/{id}/pdf` | PDF herunterladen |
+| `POST`  | `/api/credit-notes/{id}/email` | Per E-Mail senden |
+| `POST`  | `/api/invoices/{id}/credit-note` | Gutschrift zur Rechnung (ohne `items` = Vollgutschrift) |
+
+### Auswertungen
+| Methode | Pfad | Zweck |
+|---------|------|-------|
+| `GET`   | `/api/reports/vat?from=&to=` | Umsatzsteuer je Satz (UStVA-Grundlage) |
+| `GET`   | `/api/reports/vat.csv?from=&to=` | dieselbe Auswertung als CSV |
+| `GET`   | `/api/reports/revenue?from=&to=` | Erlöse je Monat und Kunde |
+| `GET`   | `/api/reports/revenue.csv?from=&to=` | dieselbe Auswertung als CSV |
+
+### PDF-Vorlagen
+| Methode | Pfad | Zweck |
+|---------|------|-------|
+| `GET`   | `/api/pdf-templates` | Liste (alle angemeldeten Benutzer) |
+| `POST`  | `/api/pdf-templates` | Vorlage anlegen (Admin) |
+| `PUT`   | `/api/pdf-templates/{id}` | Bearbeiten (Admin) |
+| `POST`  | `/api/pdf-templates/{id}/default` | Als Vorgabe setzen (Admin) |
+| `DELETE`| `/api/pdf-templates/{id}` | Löschen (Admin) |
+| `GET`   | `/api/pdf-templates/{id}/preview` | Musterrechnung als PDF |
+
+### Monitoring (Admin)
+| Methode | Pfad | Zweck |
+|---------|------|-------|
+| `GET`   | `/api/admin/metrics` | Kennzahlen als JSON |
+| `GET`   | `/api/admin/metrics.prom` | Kennzahlen im Prometheus-Textformat |
+| `POST`  | `/api/admin/metrics/test-alert` | Probealarm an die Firmen-E-Mail |
 
 ### Lieferscheine
 | Methode | Pfad | Zweck |
@@ -330,7 +422,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
 | `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen (setzt *offen* → *abgeschlossen*) |
 | `POST`  | `/api/delivery-notes/{id}/email` | Per E-Mail senden |
-| `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln |
+| `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln (nur einmal) |
 
 ### Kunden, Artikel, Dashboard, Einstellungen
 | Methode | Pfad | Zweck |
