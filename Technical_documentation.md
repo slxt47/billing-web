@@ -119,6 +119,14 @@ can carry the same running number forward with just the prefix changed
 serialized with a PostgreSQL advisory transaction lock
 (`pg_advisory_xact_lock`, fixed key) so concurrent users never collide.
 
+The one conversion that can close the circle is delivery note -> quote
+(`crud.convert_delivery_note_to_quote`, the counterpart to quote -> invoice ->
+delivery note): its target number may already exist, because the delivery note
+can descend from exactly that quote. It therefore checks first and falls back
+to the next free number instead of failing. Prices, which a delivery note does
+not carry, are looked up in the product catalogue by description and default
+to 0.
+
 Computed values (subtotal, discount, net, tax, total, remaining, overdue,
 skonto amount/date, line totals) are Python `@property` methods on the
 SQLAlchemy models, not stored columns — they are recalculated on every read.
@@ -159,19 +167,25 @@ exposed under `/api/*`. Authentication endpoints (`/login`, `/logout`) and
 the SPA/static assets (`/`, `/static/*`, `/datenschutz`, `/health`) are
 outside `/api`.
 
-CUSTOMER CSV IMPORT (`POST /api/customers/import`, multipart field `file`):
-Parsing lives in `main.py` (`_csv_text`, `_csv_reader`, `_csv_field_map`,
-`_csv_number`), writing in `crud.import_customers()`. The header row is
-mapped against `CSV_COLUMNS`, which lists German and English spellings per
-field; a name column is the only requirement, everything else falls back to
-the `CustomerIn` defaults. The delimiter (`;`, `,` or tab) is taken from the
-header line, the file is decoded as UTF-8 (BOM tolerated) or Windows-1252 for
-Excel exports, and `12,5` is read as `12.5`. Rows are matched to existing
-customers by name, case-insensitively (`crud.get_customer_by_name`), so a
-re-import updates instead of duplicating; a row without a name or with values
-`CustomerIn` rejects is skipped and reported in `errors` rather than failing
-the whole file. Caps: 1 MB, 5,000 rows, 20 reported errors. Every import is
-written to the audit log.
+CUSTOMER IMPORT (`POST /api/customers/import`, multipart field `file`):
+Takes CSV *or* JSON. Parsing lives in `main.py` (`_import_text`,
+`_rows_from_csv`, `_rows_from_json`, `_map_customer_row`), writing in
+`crud.import_customers()`. The format is picked by file extension, falling
+back to the first non-space character (`{`/`[` means JSON). Both paths end up
+as plain dicts and go through the same `FIELD_BY_ALIAS` mapping, built from
+`CSV_COLUMNS` (German and English spellings per field); unknown keys such as
+`id`, `active` or `invoices` are ignored, so the JSON that
+`GET /api/customers/{id}/export` produces can be fed straight back in. JSON
+also accepts a bare object, a list of objects and `{"customers": [...]}`. A
+name is the only requirement, everything else falls back to the `CustomerIn`
+defaults; the delimiter (`;`, `,` or tab) is taken from the CSV header line,
+files are decoded as UTF-8 (BOM tolerated) or Windows-1252 for Excel exports,
+and `12,5` is read as `12.5`. Records are matched to existing customers by
+name, case-insensitively (`crud.get_customer_by_name`), so a re-import updates
+instead of duplicating; a record without a name or with values `CustomerIn`
+rejects is skipped and reported in `errors` rather than failing the whole
+file. Caps: 1 MB, 5,000 records, 20 reported errors. Every import is written
+to the audit log.
 
 SECURITY:
 - Password hashing: PBKDF2-HMAC-SHA256, 200,000 iterations, random 16-byte
@@ -280,7 +294,10 @@ worth knowing about:
   value lets a restored draft re-select a customer before the customer list
   has finished loading.
 - Banners above the three document forms (edit lock, presence, restored
-  draft) go through `showBanner()`/`hideBanner()`. Each carries a "✕" that
+  draft) go through `showBanner()`/`hideBanner()`. They style themselves with
+  `display: flex`, which beats the browser's `[hidden] { display: none }` — the
+  `!important` rule at the end of `styles.css` is what keeps an empty banner
+  from standing there as a coloured bar. Each carries a "✕" that
   files its current text in `dismissedBanners`, so the banner stays away until
   it has something new to say — hiding the draft hint is not the same as
   discarding the draft.
@@ -302,7 +319,7 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 147 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 155 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
 invoice/quote/delivery-note lifecycles, customers and products, admin-only
 endpoints and the audit log, and the security layer itself (CSRF rejection,
@@ -314,7 +331,7 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 36 frontend tests that load the real
+`backend/tests/frontend/` holds 41 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the CSRF header and
 the HTML escaping (`npm install && npm test`, needs Node >= 20).

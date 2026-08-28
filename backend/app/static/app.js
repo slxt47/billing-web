@@ -929,6 +929,8 @@ $("#customer-form").addEventListener("submit", async (e) => {
 // Ergänzung zur Eingabemaske: eine bestehende Kundenliste (Excel/CSV) lässt
 // sich in einem Rutsch übernehmen. Ausgewertet wird die Datei serverseitig
 // (POST /api/customers/import), hier hängt nur die Bedienung dran.
+// Als Vorlage reicht CSV; JSON versteht der Import ebenfalls (u. a. den
+// Kundenexport dieser App).
 const CSV_EXAMPLE = [
   "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage",
   "Muster GmbH;info@muster.example;Frau Muster;Musterweg 1, 12345 Musterstadt;30;2;7",
@@ -951,18 +953,23 @@ $("#customer-import-example").onclick = () => {
   URL.revokeObjectURL(a.href);
 };
 
-$("#customer-import-btn").onclick = async () => {
-  const input = $("#customer-import-file");
-  const file = input.files && input.files[0];
-  if (!file) { importMessage("Bitte zuerst eine CSV-Datei auswählen.", "err"); return; }
+// Kein zweistufiges "Datei auswählen" + "Importieren": der Knopf öffnet
+// direkt den Dateidialog, die Auswahl startet den Import.
+$("#customer-import-btn").onclick = () => $("#customer-import-file").click();
 
-  importMessage("Import läuft …");
+$("#customer-import-file").addEventListener("change", async (e) => {
+  const input = e.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+
+  importMessage(`Import läuft … (${file.name})`);
   const fd = new FormData();
   fd.append("file", file);
   const res = await fetch("/api/customers/import", { method: "POST", body: fd });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     importMessage("Import fehlgeschlagen: " + (err.detail || res.status), "err");
+    input.value = "";
     return;
   }
   const r = await res.json();
@@ -970,9 +977,9 @@ $("#customer-import-btn").onclick = async () => {
   if (r.skipped) parts.push(`${r.skipped} übersprungen`);
   importMessage(parts.join(", ") + (r.errors && r.errors.length ? ` – ${r.errors.join("; ")}` : ""),
                 r.skipped ? "warn-text" : "ok");
-  input.value = "";
+  input.value = "";      // dieselbe Datei soll erneut auswählbar sein
   loadCustomers();
-};
+});
 
 // ---------------------- Artikel-Verwaltung ----------------------
 async function refreshProducts() {
@@ -1422,6 +1429,7 @@ function renderDeliveryNotes() {
         <a class="link" href="/api/delivery-notes/${d.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${d.status !== "storniert" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
+        ${d.status !== "storniert" ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>` : ""}
         ${d.status !== "storniert"
           ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
           : `<button class="link" data-act="reopen" title="Storno rückgängig">↩️ <span>zurück</span></button>`}
@@ -1436,6 +1444,20 @@ function renderDeliveryNotes() {
 
 async function deliveryAction(act, d) {
   if (act === "edit") { startDeliveryEdit(d); return; }
+  if (act === "to-quote") {
+    if (!confirm(`Lieferschein ${d.number} jetzt in ein Angebot umwandeln?`)) return;
+    const res = await fetch(`/api/delivery-notes/${d.id}/convert-to-quote`, { method: "POST" });
+    if (res.ok) {
+      const q = await res.json();
+      alert(`✓ Angebot ${q.number} erstellt. Die Preise kommen – soweit vorhanden – `
+            + `aus dem Artikelstamm und lassen sich im Angebot anpassen.`);
+      show("quotes");
+    } else {
+      const e = await res.json().catch(() => ({}));
+      alert("Fehler: " + (e.detail || res.status));
+    }
+    return;
+  }
   if (act === "email") {
     const to = prompt("Lieferschein per E-Mail senden an:", emailForCustomer(d.customer_name));
     if (!to) return;
