@@ -22,7 +22,12 @@ file: the logo upload no longer wipes unsaved company data, the customer list
 no longer runs past the edge of the card, customers can be imported from CSV,
 "History" is now "Rechnungsübersicht", the lock/presence/restored-draft
 banners can be dismissed, and a customer search now preselects its best hit.
-Test counts are up to 147 backend + 36 frontend tests.
+Test counts are up to 155 backend + 41 frontend tests.
+
+Directly afterwards (same day, second round): delivery notes can be turned
+into quotes, the empty hint banners no longer show as coloured bars, and the
+customer import takes JSON as well as CSV without a separate "choose file"
+step.
 
 [SECURITY & PRODUCTION]
 [X] PBKDF2 password hashing (200k iterations, per-user salt)
@@ -74,10 +79,10 @@ Test counts are up to 147 backend + 36 frontend tests.
 [X] Discount (%) and Kleinunternehmer / §19 UStG mode (no VAT)
 [X] Skonto (early-payment discount) calculation and PDF display
 [X] Idempotent schema migrations on startup (ADD COLUMN IF NOT EXISTS)
-[X] Automated test suite: 147 pytest tests in backend/tests/ against a
+[X] Automated test suite: 155 pytest tests in backend/tests/ against a
     temporary SQLite DB (conftest.py) — invoices, quotes, delivery notes,
-    customers/products (incl. the CSV import), admin endpoints, audit log and
-    the security layer. Run with `python -m pytest` in backend/. Plus 36
+    customers/products (incl. the CSV/JSON import), admin endpoints, audit log and
+    the security layer. Run with `python -m pytest` in backend/. Plus 41
     frontend tests in backend/tests/frontend/ that drive the real index.html +
     app.js in jsdom (customer picker incl. best-match preselection, draft
     cache, dismissible banners, logo upload, customer import, list filters,
@@ -92,7 +97,12 @@ Test counts are up to 147 backend + 36 frontend tests.
 [X] Cancel (storno) an invoice and revert back to "offen"
 [X] Quotes (Angebote): create, edit, PDF, email, status, convert to invoice
 [X] Delivery notes (Lieferscheine): create, edit, PDF, email, status,
-    generate from an existing invoice
+    generate from an existing invoice, and convert into a quote
+    (POST /api/delivery-notes/{id}/convert-to-quote, "zu Angebot" in the
+    list): quantities from the delivery note, prices from the product
+    catalogue where the description matches, otherwise 0. Reuses the running
+    number (LS-2026-0007 -> AN-2026-0007) and falls back to the next free one
+    if that number is already taken.
 [X] Invoice/quote/delivery-note PDF generation incl. GiroCode/EPC-QR
 [X] Email sending for invoices, quotes, delivery notes, payment reminders,
     and automatic payment confirmation on full settlement — fires on BOTH
@@ -114,13 +124,15 @@ Test counts are up to 147 backend + 36 frontend tests.
 [ ] Customer groups
 [ ] Credit limits
 [ ] Customer notes field
-[X] CSV import of customers (POST /api/customers/import, "Kunden
-    importieren" in the customer view): header row mapped against German and
-    English column names, `;`/`,`/tab delimiter, UTF-8 or Windows-1252,
-    existing customers matched by name are updated instead of duplicated,
-    bad rows skipped and reported. Template via "Beispieldatei".
-[ ] CSV import for products, and CSV export for both (the DSGVO export is
-    JSON, per customer, not a bulk CSV feature)
+[X] Customer import from CSV *or* JSON (POST /api/customers/import, "Kunden
+    importieren" in the customer view): column/key names mapped against German
+    and English spellings, `;`/`,`/tab delimiter, UTF-8 or Windows-1252,
+    existing customers matched by name are updated instead of duplicated, bad
+    records skipped and reported. JSON includes the file that the per-customer
+    DSGVO export produces, so export and import fit together. The button opens
+    the file dialog directly; picking the file starts the import. CSV template
+    via "Beispieldatei".
+[ ] Import for products, and a bulk CSV export for both
 
 [REPORTING]
 [X] Dashboard KPIs (revenue, open amount, overdue amount, 6-month chart)
@@ -194,8 +206,8 @@ STILL OPEN (unchanged by the 2026-08-27 and 2026-08-28 passes)
 The remaining [ ] items are real product/infrastructure work, not oversights:
 recurring invoices, approval workflow, credit notes as their own document
 type, multi-currency, custom PDF templates, document attachments, customer
-groups, credit limits, customer notes, CSV for products (customers can be
-imported since 2026-08-28) and CSV export, a custom report
+groups, credit limits, customer notes, import for products (customers can be
+imported from CSV/JSON since 2026-08-28) and bulk CSV export, a custom report
 builder, a VAT-return export, P&L reporting, monitoring, a response cache,
 horizontal scaling (needs shared state for the login lockout and the
 rate-limit counters), an external pen test, and diagrams beyond the ASCII
@@ -245,3 +257,17 @@ NEW IDEAS (all done on 2026-08-28):
     An already-picked customer that still matches the search is kept, and the
     data is only re-applied when the best hit actually changes, so typing on
     does not overwrite fields edited by hand.
+
+
+NEUE PUNKTE (2026-08-28, zweiter Durchgang):
+[X] Lieferschein -> Angebot ("zu Angebot" in der Lieferscheinliste). "zu
+    Rechnung" gibt es dort bewusst nicht; im Angebot bleibt es unverändert.
+[X] Die leeren Hinweisbanner (orange = Sperre/Anwesenheit, blau = Entwurf)
+    standen dauerhaft über den Formularen: `.warn-banner`/`.presence-banner`/
+    `.draft-banner` setzen `display: flex`, und Autoren-CSS schlägt die
+    Browser-Vorgabe `[hidden] { display: none }`. `[hidden] { display: none
+    !important; }` am Ende von styles.css blendet sie wieder aus; ein Test
+    rechnet dafür mit der echten styles.css statt nur das Attribut zu prüfen.
+[X] Import nimmt jetzt CSV und JSON (inkl. der Datei aus dem Kunden-Export),
+    und die sichtbare Dateiauswahl ist weg: der Knopf öffnet den Dialog, die
+    Auswahl startet den Import.

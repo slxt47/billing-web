@@ -1,6 +1,7 @@
 """FastAPI-App: Rechnungs-Web-Applikation."""
 import csv
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -441,9 +442,9 @@ def set_customer_active(customer_id: int, body: schemas.ActiveUpdate,
     return crud.set_customer_active(db, customer, body.active)
 
 
-# Spaltenüberschriften eines Imports: deutsche wie englische Schreibweisen,
-# damit sowohl ein Excel-Export der eigenen Kundenliste als auch eine von Hand
-# getippte Datei ohne Nacharbeit passt.
+# Spalten- bzw. Schlüsselnamen eines Imports: deutsche wie englische
+# Schreibweisen, damit sowohl ein Excel-Export der eigenen Kundenliste als
+# auch der JSON-Export dieser App (DSGVO Art. 15) ohne Nacharbeit passt.
 CSV_COLUMNS = {
     "name": ("name", "kunde", "kundenname", "firma", "customer", "customer_name"),
     "email": ("email", "e-mail", "mail", "e_mail", "emailadresse"),
@@ -454,12 +455,16 @@ CSV_COLUMNS = {
     "skonto_percent": ("skonto", "skonto_prozent", "skonto_percent", "skonto%"),
     "skonto_days": ("skonto_tage", "skontotage", "skonto_days", "skonto_frist"),
 }
-CSV_MAX_BYTES = 1_000_000
-CSV_MAX_ROWS = 5_000
+FIELD_BY_ALIAS = {alias: field for field, aliases in CSV_COLUMNS.items()
+                  for alias in aliases}
+NUMBER_FIELDS = ("payment_term_days", "skonto_percent", "skonto_days")
+IMPORT_MAX_BYTES = 1_000_000
+IMPORT_MAX_ROWS = 5_000
+IMPORT_MAX_ERRORS = 20
 
 
-def _csv_text(raw: bytes) -> str:
-    """CSV-Bytes dekodieren. Excel schreibt hierzulande gern cp1252 statt UTF-8."""
+def _import_text(raw: bytes) -> str:
+    """Import-Bytes dekodieren. Excel schreibt hierzulande gern cp1252 statt UTF-8."""
     for encoding in ("utf-8-sig", "cp1252"):
         try:
             return raw.decode(encoding)
@@ -468,80 +473,114 @@ def _csv_text(raw: bytes) -> str:
     raise HTTPException(400, "Datei ist nicht lesbar (weder UTF-8 noch Windows-1252)")
 
 
-def _csv_reader(text_content: str) -> csv.DictReader:
+def _field_for(key: str) -> str | None:
+    """Spaltenüberschrift bzw. JSON-Schlüssel auf ein Feld von CustomerIn abbilden."""
+    return FIELD_BY_ALIAS.get(str(key or "").strip().lstrip("\ufeff").lower())
+
+
+def _map_customer_row(raw: dict) -> dict:
+    """Rohdatensatz (CSV-Zeile oder JSON-Objekt) auf CustomerIn-Felder
+    eindampfen. Unbekannte Schlüssel (id, active, invoices …) fallen weg."""
+    values: dict[str, str] = {}
+    for key, value in raw.items():
+        field = _field_for(key)
+        if not field or field in values or value is None:
+            continue
+        values[field] = str(value).strip()
+    for field in NUMBER_FIELDS:
+        if field in values:
+            # "12,5" (deutsche Schreibweise) -> "12.5"; leer = Vorgabewert
+            values[field] = values[field].replace(",", ".")
+            if not values[field]:
+                values.pop(field)
+    return values
+
+
+def _rows_from_csv(text_content: str) -> list[dict]:
     first_line = text_content.splitlines()[0] if text_content.strip() else ""
     delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
     if "\t" in first_line and first_line.count("\t") > first_line.count(delimiter):
         delimiter = "\t"
-    return csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+    reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+    if not any(_field_for(h) == "name" for h in reader.fieldnames or []):
+        raise HTTPException(400, "Es fehlt eine Spalte mit dem Kundennamen "
+                                 "(z. B. \"name\") in der Kopfzeile")
+    return list(reader)
 
 
-def _csv_field_map(fieldnames: list[str] | None) -> dict[str, str]:
-    """Ordnet die Spalten der Datei den Feldern von CustomerIn zu."""
-    mapping: dict[str, str] = {}
-    for raw_name in fieldnames or []:
-        key = (raw_name or "").strip().lower().lstrip("\ufeff")
-        for field, aliases in CSV_COLUMNS.items():
-            if key in aliases and field not in mapping.values():
-                mapping[raw_name] = field
-                break
-    return mapping
+def _rows_from_json(text_content: str) -> list[dict]:
+    """Kunden aus einer JSON-Datei ziehen. Akzeptiert den Export dieser App
+    ({"customer": {...}, "invoices": [...]}), eine Liste von Kunden, ein
+    einzelnes Kundenobjekt und {"customers": [...]}."""
+    try:
+        data = json.loads(text_content)
+    except json.JSONDecodeError as err:
+        raise HTTPException(400, f"Die JSON-Datei ist fehlerhaft: {err.msg} "
+                                 f"(Zeile {err.lineno})")
+    if isinstance(data, dict):
+        if isinstance(data.get("customer"), dict):
+            data = [data["customer"]]
+        elif isinstance(data.get("customers"), list):
+            data = data["customers"]
+        else:
+            data = [data]
+    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+        raise HTTPException(400, "Unerwarteter Aufbau: erwartet wird ein Kundenobjekt "
+                                 "oder eine Liste von Kundenobjekten")
+    if not any(_field_for(key) == "name" for row in data for key in row):
+        raise HTTPException(400, "Es fehlt ein Feld mit dem Kundennamen "
+                                 "(z. B. \"name\")")
+    return data
 
 
-def _csv_number(value: str) -> str:
-    """"12,5" (deutsche Schreibweise) -> "12.5"; leer bleibt leer."""
-    return (value or "").strip().replace(",", ".")
+def _looks_like_json(filename: str, text_content: str) -> bool:
+    if (filename or "").lower().endswith(".json"):
+        return True
+    return text_content.lstrip()[:1] in ("{", "[")
 
 
 @app.post("/api/customers/import", response_model=schemas.CustomerImportResult)
 async def import_customers(request: Request, file: UploadFile = File(...),
                            db: Session = Depends(get_db)):
-    """Kundenstamm aus einer CSV-Datei übernehmen.
+    """Kundenstamm aus einer CSV- oder JSON-Datei übernehmen.
 
-    Pflichtspalte ist der Name; alles andere ist optional. Ein bereits
-    vorhandener Kunde (gleicher Name) wird aktualisiert statt doppelt
-    angelegt. Fehlerhafte Zeilen werden übersprungen und einzeln gemeldet –
-    ein Tippfehler in Zeile 20 soll die anderen 19 nicht verhindern."""
+    JSON schließt den Kundenexport dieser App ein (DSGVO Art. 15), sodass
+    Export und Import zueinander passen. Pflichtangabe ist der Name, alles
+    andere ist optional. Ein bereits vorhandener Kunde (gleicher Name) wird
+    aktualisiert statt doppelt angelegt. Fehlerhafte Datensätze werden
+    übersprungen und einzeln gemeldet – ein Tippfehler im 20. Datensatz soll
+    die anderen 19 nicht verhindern."""
     raw = await file.read()
     if not raw.strip():
         raise HTTPException(400, "Die Datei ist leer")
-    if len(raw) > CSV_MAX_BYTES:
+    if len(raw) > IMPORT_MAX_BYTES:
         raise HTTPException(400, "Datei ist zu groß (max. 1 MB)")
 
-    reader = _csv_reader(_csv_text(raw))
-    field_map = _csv_field_map(reader.fieldnames)
-    if "name" not in field_map.values():
-        raise HTTPException(400, "Es fehlt eine Spalte mit dem Kundennamen "
-                                 "(z. B. \"name\") in der Kopfzeile")
+    text_content = _import_text(raw)
+    raw_rows = (_rows_from_json(text_content)
+                if _looks_like_json(file.filename or "", text_content)
+                else _rows_from_csv(text_content))
+    if len(raw_rows) > IMPORT_MAX_ROWS:
+        raise HTTPException(400, f"Zu viele Datensätze (max. {IMPORT_MAX_ROWS})")
 
     rows: list[schemas.CustomerIn] = []
     errors: list[str] = []
     skipped = 0
-    for line_no, row in enumerate(reader, start=2):
-        if line_no - 1 > CSV_MAX_ROWS:
-            raise HTTPException(400, f"Zu viele Zeilen (max. {CSV_MAX_ROWS})")
-        values = {}
-        for raw_name, field in field_map.items():
-            values[field] = (row.get(raw_name) or "").strip()
+    for number, raw_row in enumerate(raw_rows, start=1):
+        values = _map_customer_row(raw_row)
         if not values.get("name"):
             skipped += 1
             continue
-        for field in ("payment_term_days", "skonto_percent", "skonto_days"):
-            if field in values:
-                values[field] = _csv_number(values[field])
-            if not values.get(field):
-                values.pop(field, None)
         try:
             rows.append(schemas.CustomerIn(**values))
         except ValidationError:
             skipped += 1
-            if len(errors) < 20:
-                errors.append(f"Zeile {line_no}: ungültige Werte "
-                              f"({values.get('name', '')})".strip())
+            if len(errors) < IMPORT_MAX_ERRORS:
+                errors.append(f"Datensatz {number} ({values['name']}): ungültige Werte")
 
     created, updated = crud.import_customers(db, rows)
     crud.log_action(db, auth.current_user(request) or "", "import", "customer", None,
-                    f"CSV-Import: {created} neu, {updated} aktualisiert, "
+                    f"Import: {created} neu, {updated} aktualisiert, "
                     f"{skipped} übersprungen")
     return schemas.CustomerImportResult(created=created, updated=updated,
                                         skipped=skipped, errors=errors)
@@ -785,6 +824,19 @@ def email_delivery_note(dn_id: int, body: schemas.EmailRequest, db: Session = De
     except OSError as err:
         raise HTTPException(502, f"E-Mail konnte nicht gesendet werden: {err}")
     return {"sent": True, "to": to, "number": dn.number}
+
+
+@app.post("/api/delivery-notes/{dn_id}/convert-to-quote",
+          response_model=schemas.QuoteOut, status_code=201)
+def convert_delivery_note(dn_id: int, db: Session = Depends(get_db)):
+    """Lieferschein -> Angebot. Die Gegenrichtung zu Angebot -> Rechnung ->
+    Lieferschein: aus einer Lieferung wird ein Angebot für die nächste."""
+    dn = crud.get_delivery_note(db, dn_id)
+    if not dn:
+        raise HTTPException(404, "Lieferschein nicht gefunden")
+    if dn.status == models.DN_CANCELLED:
+        raise HTTPException(400, "Ein stornierter Lieferschein lässt sich nicht umwandeln")
+    return crud.convert_delivery_note_to_quote(db, dn)
 
 
 @app.post("/api/invoices/{invoice_id}/convert-to-delivery-note",

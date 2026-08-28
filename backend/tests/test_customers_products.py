@@ -1,4 +1,6 @@
 """Kunden- und Artikelstammdaten inkl. DSGVO-Funktionen."""
+import json
+
 from conftest import make_invoice
 
 CUSTOMER = {
@@ -165,6 +167,60 @@ def test_import_reads_windows_encoded_files(user_client):
                         encoding="cp1252").json()
     assert result["created"] == 1
     assert user_client.get("/api/customers").json()[0]["name"] == "Müller & Söhne KG"
+
+
+def test_import_reads_the_json_export_of_a_customer(admin_client):
+    """Was der DSGVO-Export ausgibt, muss der Import auch wieder annehmen."""
+    customer = admin_client.post("/api/customers", json=CUSTOMER).json()
+    exported = admin_client.get(f"/api/customers/{customer['id']}/export").json()
+    admin_client.delete(f"/api/customers/{customer['id']}")
+    assert admin_client.get("/api/customers").json() == []
+
+    result = admin_client.post(
+        "/api/customers/import",
+        files={"file": ("kunde-1-export.json", json.dumps(exported).encode(),
+                        "application/json")},
+    ).json()
+    assert (result["created"], result["updated"]) == (1, 0)
+
+    restored = admin_client.get("/api/customers").json()[0]
+    assert restored["name"] == CUSTOMER["name"]
+    assert restored["email"] == CUSTOMER["email"]
+    assert restored["payment_term_days"] == 30
+    assert restored["skonto_percent"] == 2
+
+
+def test_import_reads_a_json_list_and_updates_by_name(user_client):
+    user_client.post("/api/customers", json=CUSTOMER)
+    payload = [
+        {"name": "Stamm GmbH", "email": "neu@stamm.example"},
+        {"Name": "Neu AG", "Zahlungsfrist": 21},
+    ]
+    result = user_client.post(
+        "/api/customers/import",
+        files={"file": ("kunden.json", json.dumps(payload).encode(), "application/json")},
+    ).json()
+    assert (result["created"], result["updated"]) == (1, 1)
+
+    customers = {c["name"]: c for c in user_client.get("/api/customers").json()}
+    assert customers["Stamm GmbH"]["email"] == "neu@stamm.example"
+    assert customers["Neu AG"]["payment_term_days"] == 21
+
+
+def test_import_rejects_broken_json(user_client):
+    response = user_client.post(
+        "/api/customers/import",
+        files={"file": ("kunden.json", b'{"name": ', "application/json")})
+    assert response.status_code == 400
+    assert "JSON" in response.json()["detail"]
+
+
+def test_import_rejects_json_without_a_name(user_client):
+    response = user_client.post(
+        "/api/customers/import",
+        files={"file": ("kunden.json", b'[{"stadt": "Wien"}]', "application/json")})
+    assert response.status_code == 400
+    assert "Kundennamen" in response.json()["detail"]
 
 
 def test_import_without_name_column_is_rejected(user_client):

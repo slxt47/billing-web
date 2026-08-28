@@ -153,8 +153,8 @@ button.secondary { background: var(--card-2); color: var(--text); margin-top: 0.
 .err { color: var(--red); }
 .warn-text { color: var(--orange); }
 
-/* Kunden-Import: Dateiauswahl in der Leiste */
-.bar input[type="file"] { margin: 0; padding: 0.4rem 0.55rem; }
+/* Kunden-Import: die Dateiauswahl selbst ist unsichtbar, den Dialog öffnet
+   der Knopf daneben. */
 #customer-import-msg { min-height: 1.2em; }
 
 .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
@@ -306,3 +306,12 @@ nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #
 :root[data-theme="light"] .badge.storniert,
 :root[data-theme="light"] .badge.ueberfaellig { background: #ffe9e9; }
 :root[data-theme="light"] input[type="date"] { color-scheme: light; }
+
+/* ===== Ausgeblendetes bleibt ausgeblendet =====
+   Das hidden-Attribut muss stärker sein als die eigenen Layout-Regeln:
+   die Hinweisbanner setzen `display: flex`, und Autoren-CSS schlägt die
+   Browser-Vorgabe `[hidden] { display: none }`. Ohne diese Regel stehen die
+   leeren Banner (Sperre, Anwesenheit, Entwurf) dauerhaft als farbige Kästen
+   über den Formularen. Sie steht bewusst am Dateiende, damit sie auch ohne
+   Auswertung von `!important` gewinnt. */
+[hidden] { display: none !important; }

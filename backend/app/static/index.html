@@ -371,16 +371,18 @@
       </form>
 
       <h3>Kunden importieren</h3>
-      <p class="hint">CSV-Datei mit einer Kopfzeile; nötig ist nur eine Spalte
-        <code>Name</code>. Erkannt werden außerdem <code>E-Mail</code>,
+      <p class="hint">CSV oder JSON – auch der Kunden-Export dieser App
+        (📤 Export) lässt sich direkt wieder einlesen. Nötig ist nur
+        <code>Name</code>; erkannt werden außerdem <code>E-Mail</code>,
         <code>Ansprechpartner</code>, <code>Anschrift</code>,
         <code>Zahlungsfrist</code>, <code>Skonto</code> und <code>Skonto_Tage</code>
-        (Trennzeichen <code>;</code> oder <code>,</code>). Ein bereits vorhandener
-        Kunde mit demselben Namen wird aktualisiert statt doppelt angelegt.</p>
+        (bei CSV <code>;</code> oder <code>,</code> als Trennzeichen). Ein bereits
+        vorhandener Kunde mit demselben Namen wird aktualisiert statt doppelt
+        angelegt. Nach der Auswahl startet der Import sofort.</p>
       <div class="bar">
-        <input type="file" id="customer-import-file" class="grow" accept=".csv,text/csv">
-        <button type="button" id="customer-import-btn" class="secondary">⬆️ Importieren</button>
-        <button type="button" id="customer-import-example" class="secondary">📄 Beispieldatei</button>
+        <input type="file" id="customer-import-file" accept=".csv,.json,text/csv,application/json" hidden>
+        <button type="button" id="customer-import-btn" class="secondary">⬆️ Datei wählen &amp; importieren</button>
+        <button type="button" id="customer-import-example" class="secondary">📄 Beispieldatei (CSV)</button>
       </div>
       <p id="customer-import-msg" class="hint"></p>
 

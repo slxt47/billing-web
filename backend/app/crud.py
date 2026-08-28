@@ -637,28 +637,33 @@ def list_audit_log(db: Session, limit: int | None = 200,
 
 
 # --------------------------- Angebote (Quotes) ---------------------------
+def _build_quote(data: schemas.QuoteIn, number: str) -> models.Quote:
+    quote = models.Quote(
+        number=number,
+        customer_name=data.customer_name,
+        customer_address=data.customer_address,
+        customer_contact_person=data.customer_contact_person,
+        issue_date=date.today(),
+        valid_until=data.valid_until,
+        tax_rate=data.tax_rate,
+        discount_percent=data.discount_percent,
+        small_business=data.small_business,
+        notes=data.notes,
+    )
+    for it in data.items:
+        quote.items.append(models.QuoteItem(
+            description=it.description, quantity=it.quantity,
+            unit_price=it.unit_price,
+        ))
+    return quote
+
+
 def create_quote(db: Session, data: schemas.QuoteIn) -> models.Quote:
     for _ in range(10):
         _lock_doc_numbers(db)
         year = date.today().year
         number = f"AN-{year}-{_next_doc_suffix(db, year):04d}"
-        quote = models.Quote(
-            number=number,
-            customer_name=data.customer_name,
-            customer_address=data.customer_address,
-            customer_contact_person=data.customer_contact_person,
-            issue_date=date.today(),
-            valid_until=data.valid_until,
-            tax_rate=data.tax_rate,
-            discount_percent=data.discount_percent,
-            small_business=data.small_business,
-            notes=data.notes,
-        )
-        for it in data.items:
-            quote.items.append(models.QuoteItem(
-                description=it.description, quantity=it.quantity,
-                unit_price=it.unit_price,
-            ))
+        quote = _build_quote(data, number)
         db.add(quote)
         try:
             db.commit()
@@ -825,6 +830,46 @@ def set_delivery_note_status(db: Session, dn: models.DeliveryNote, status: str) 
 def delete_delivery_note(db: Session, dn: models.DeliveryNote) -> None:
     db.delete(dn)
     db.commit()
+
+
+def convert_delivery_note_to_quote(db: Session, dn: models.DeliveryNote) -> models.Quote:
+    """Erstellt aus einem Lieferschein ein Angebot. Beschreibung und Menge
+    kommen aus dem Lieferschein, der Preis – den ein Lieferschein nicht kennt
+    – aus dem Artikelstamm, sofern die Beschreibung dort steht; sonst 0, dann
+    trägt man ihn im Angebot nach.
+
+    Die laufende Nummer wird wie bei den anderen Umwandlungen
+    weitergeschoben (LS-2026-0007 -> AN-2026-0007). Anders als dort kann die
+    Zielnummer aber schon belegt sein: der Lieferschein kann aus einer
+    Rechnung stammen, die wiederum aus genau diesem Angebot entstanden ist.
+    In dem Fall bekommt das Angebot die nächste freie Nummer."""
+    prices = {p.name: p.unit_price for p in db.query(models.Product).all()}
+    data = schemas.QuoteIn(
+        customer_name=dn.customer_name,
+        customer_address=dn.customer_address,
+        customer_contact_person=dn.customer_contact_person,
+        notes=dn.notes,
+        items=[
+            schemas.QuoteItemIn(description=it.description, quantity=it.quantity,
+                                unit_price=prices.get(it.description, 0))
+            for it in dn.items
+        ],
+    )
+    _, year, suffix = dn.number.split("-")
+    _lock_doc_numbers(db)
+    number = f"AN-{year}-{suffix}"
+    if db.query(models.Quote).filter(models.Quote.number == number).first():
+        this_year = date.today().year
+        number = f"AN-{this_year}-{_next_doc_suffix(db, this_year):04d}"
+    quote = _build_quote(data, number)
+    db.add(quote)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise RuntimeError(f"Angebotsnummer {number} ist bereits vergeben")
+    db.refresh(quote)
+    return quote
 
 
 def convert_invoice_to_delivery_note(db: Session, invoice: models.Invoice) -> models.DeliveryNote:

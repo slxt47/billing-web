@@ -707,8 +707,8 @@ test("Der Kunden-Import schickt die Datei und meldet das Ergebnis", async () => 
   window.document.querySelector("#nav-customers").click();
   await settle();
 
+  // Die Auswahl allein startet den Import – kein zweiter Klick nötig.
   pickFile(window, "#customer-import-file", "kunden.csv", "text/csv");
-  window.document.querySelector("#customer-import-btn").click();
   await settle(50);
 
   const upload = requests.find((r) => r.url === "/api/customers/import");
@@ -721,16 +721,108 @@ test("Der Kunden-Import schickt die Datei und meldet das Ergebnis", async () => 
   assert.match(msg, /1 aktualisiert/);
 });
 
-test("Ohne ausgewählte Datei wird nichts hochgeladen", async () => {
+test("Der Import-Knopf öffnet nur den Dateidialog", async () => {
   const { window, requests } = startApp();
   await settle();
   window.document.querySelector("#nav-customers").click();
   await settle();
 
+  const input = window.document.querySelector("#customer-import-file");
+  let opened = 0;
+  input.click = () => { opened += 1; };
   window.document.querySelector("#customer-import-btn").click();
   await settle(20);
 
-  assert.ok(!requests.some((r) => r.url === "/api/customers/import"));
+  assert.equal(opened, 1, "der Knopf öffnet die Dateiauswahl");
+  assert.ok(!requests.some((r) => r.url === "/api/customers/import"),
+            "ohne Datei wird nichts hochgeladen");
+});
+
+test("Auch eine JSON-Datei wird importiert", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/customers/import": { created: 1, updated: 0, skipped: 0, errors: [] } },
+  });
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+
+  pickFile(window, "#customer-import-file", "kunde-1-export.json", "application/json");
+  await settle(50);
+
+  assert.ok(requests.some((r) => r.url === "/api/customers/import"));
   assert.match(window.document.querySelector("#customer-import-msg").textContent,
-               /CSV-Datei auswählen/);
+               /1 neu angelegt/);
+});
+
+test("Die Dateiauswahl selbst ist nicht sichtbar", async () => {
+  const { window } = startApp();
+  await settle();
+  assert.equal(window.document.querySelector("#customer-import-file").hidden, true);
+});
+
+// -------------------------------- Lieferschein -> Angebot
+test("Ein Lieferschein lässt sich in ein Angebot umwandeln", async () => {
+  const { window, requests } = startApp({
+    routes: {
+      "/api/delivery-notes": [
+        { id: 5, number: "LS-2026-0005", customer_name: "Alpha AG",
+          issue_date: "2026-02-01", status: "offen", items: [] },
+      ],
+      "/api/delivery-notes/5/convert-to-quote": { id: 9, number: "AN-2026-0005" },
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  const row = window.document.querySelector("#delivery-body tr");
+  const button = row.querySelector("button[data-act=to-quote]");
+  assert.ok(button, "Knopf „zu Angebot“ in der Lieferscheinliste");
+  button.click();
+  await settle(50);
+
+  const call = requests.find((r) => r.url === "/api/delivery-notes/5/convert-to-quote");
+  assert.ok(call, "POST /api/delivery-notes/5/convert-to-quote");
+  assert.equal(call.options.method, "POST");
+  assert.equal(window.document.querySelector("#view-quotes").hidden, false,
+               "danach steht man in der Angebotsansicht");
+});
+
+test("Ein stornierter Lieferschein bietet keine Umwandlung an", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/delivery-notes": [
+        { id: 6, number: "LS-2026-0006", customer_name: "Beta GmbH",
+          issue_date: "2026-02-02", status: "storniert", items: [] },
+      ],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  assert.equal(window.document.querySelectorAll("#delivery-body button[data-act=to-quote]").length, 0);
+});
+
+// -------------------------------- Leere Banner sind wirklich weg
+// Regression: die Banner setzen `display: flex`, und Autoren-CSS schlägt die
+// Browser-Vorgabe `[hidden] { display: none }`. Ohne die !important-Regel in
+// styles.css standen die leeren Kästen dauerhaft über den Formularen –
+// im DOM "hidden", auf dem Bildschirm sichtbar. Deshalb wird hier mit der
+// echten styles.css gerechnet statt nur das Attribut zu prüfen.
+test("Leere Hinweisbanner werden nicht angezeigt", () => {
+  const css = readFileSync(new URL("../../app/static/styles.css", import.meta.url), "utf8");
+  const dom = new JSDOM(HTML.replace("</head>", `<style>${css}</style></head>`),
+                        { pretendToBeVisual: true });
+  openWindows.push(dom.window);
+
+  for (const sel of ["#lock-banner", "#invoice-presence", "#quote-presence",
+                     "#delivery-presence", "#invoice-draft-banner",
+                     "#quote-draft-banner", "#delivery-draft-banner",
+                     "#customer-import-file"]) {
+    const el = dom.window.document.querySelector(sel);
+    assert.equal(el.hidden, true, `${sel}: hidden-Attribut`);
+    assert.equal(dom.window.getComputedStyle(el).display, "none",
+                 `${sel}: darf nicht als leerer Kasten stehen bleiben`);
+  }
 });

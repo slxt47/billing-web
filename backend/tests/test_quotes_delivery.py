@@ -134,3 +134,60 @@ def test_delivery_note_search(user_client):
     user_client.post("/api/delivery-notes", json={**NOTE, "customer_name": "Süd"})
     assert len(user_client.get("/api/delivery-notes?search=nord").json()) == 1
     assert user_client.get("/api/delivery-notes").headers["X-Total-Count"] == "2"
+
+
+# --------------------------- Lieferschein -> Angebot ----------------------
+def test_delivery_note_converts_to_quote(user_client):
+    user_client.post("/api/products", json={"name": "Beratung", "unit_price": 120})
+    dn = user_client.post("/api/delivery-notes", json={
+        "customer_name": "Wandel GmbH",
+        "customer_address": "Wandelweg 1",
+        "customer_contact_person": "Frau Wandel",
+        "notes": "Lieferung vom Dienstag",
+        "items": [{"description": "Beratung", "quantity": 3},
+                  {"description": "Sonderposten", "quantity": 1}],
+    }).json()
+
+    quote = user_client.post(f"/api/delivery-notes/{dn['id']}/convert-to-quote")
+    assert quote.status_code == 201, quote.text
+    quote = quote.json()
+
+    assert quote["number"] == dn["number"].replace("LS-", "AN-")
+    assert quote["customer_name"] == "Wandel GmbH"
+    assert quote["customer_contact_person"] == "Frau Wandel"
+    assert quote["status"] == "offen"
+    # Menge kommt aus dem Lieferschein, der Preis – wenn bekannt – aus dem
+    # Artikelstamm; sonst 0 zum Nachtragen.
+    prices = {it["description"]: it["unit_price"] for it in quote["items"]}
+    assert prices == {"Beratung": 120.0, "Sonderposten": 0.0}
+    assert [it["quantity"] for it in quote["items"]] == [3.0, 1.0]
+
+
+def test_delivery_note_conversion_avoids_a_taken_number(user_client):
+    """Angebot -> Rechnung -> Lieferschein -> Angebot: die ursprüngliche
+    Angebotsnummer ist vergeben, also muss eine neue vergeben werden."""
+    quote = user_client.post("/api/quotes", json=QUOTE).json()
+    invoice = user_client.post(f"/api/quotes/{quote['id']}/convert").json()
+    dn = user_client.post(
+        f"/api/invoices/{invoice['id']}/convert-to-delivery-note").json()
+    assert dn["number"].endswith(quote["number"].split("-")[-1])
+
+    second = user_client.post(f"/api/delivery-notes/{dn['id']}/convert-to-quote").json()
+    assert second["number"] != quote["number"]
+    assert second["number"].startswith("AN-")
+    assert len(user_client.get("/api/quotes").json()) == 2
+
+
+def test_cancelled_delivery_note_cannot_be_converted(user_client):
+    dn = user_client.post("/api/delivery-notes", json={
+        "customer_name": "Storno GmbH",
+        "items": [{"description": "Ware", "quantity": 1}],
+    }).json()
+    user_client.patch(f"/api/delivery-notes/{dn['id']}/status",
+                      json={"status": "storniert"})
+    response = user_client.post(f"/api/delivery-notes/{dn['id']}/convert-to-quote")
+    assert response.status_code == 400
+
+
+def test_converting_an_unknown_delivery_note_is_404(user_client):
+    assert user_client.post("/api/delivery-notes/999/convert-to-quote").status_code == 404

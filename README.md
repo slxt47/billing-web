@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (147 Backend- + 36 Frontend-Tests) with CI are
+and an automated test suite (155 Backend- + 41 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -61,7 +61,10 @@ code and `TODO.md` first.
   → `RE-2026-0007`).
 - **Lieferscheine** — reiner Liefernachweis (Beschreibung + Menge, ohne Preise),
   frei anlegbar oder direkt aus einer Rechnung erzeugt (`RE-2026-0007` →
-  `LS-2026-0007`); als PDF herunterladen oder per E-Mail verschicken.
+  `LS-2026-0007`); als PDF herunterladen oder per E-Mail verschicken. Aus einem
+  Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot"): Menge
+  und Beschreibung kommen aus der Lieferung, die Preise – soweit die Position im
+  Artikelstamm steht – aus den Standardpreisen, sonst 0 zum Nachtragen.
 - Angebote, Rechnungen und Lieferscheine teilen sich **eine fortlaufende
   Belegnummer pro Jahr**, damit eine Umwandlung die Nummer sauber weiterschiebt.
 
@@ -75,12 +78,15 @@ code and `TODO.md` first.
 - **Aktivieren/Deaktivieren** — Kunden und Artikel können statt gelöscht auch nur
   deaktiviert werden (bleiben in der Auswahl ausgeblendet, Rechnungsübersicht/alte
   Belege bleiben unberührt).
-- **Kunden-Import (CSV)** — eine bestehende Kundenliste lässt sich im Reiter
-  „Kunden“ als CSV-Datei einlesen (Pflichtspalte `Name`, optional E-Mail,
+- **Kunden-Import (CSV oder JSON)** — eine bestehende Kundenliste lässt sich im
+  Reiter „Kunden“ einlesen: CSV (Pflichtspalte `Name`, optional E-Mail,
   Ansprechpartner, Anschrift, Zahlungsfrist und Skonto; `;` oder `,` als
-  Trennzeichen, UTF-8 oder Windows-1252). Gleiche Namen werden aktualisiert
-  statt doppelt angelegt, fehlerhafte Zeilen einzeln gemeldet. Eine Vorlage
-  gibt es per Knopfdruck („Beispieldatei“).
+  Trennzeichen, UTF-8 oder Windows-1252) **oder JSON** — inklusive der Datei,
+  die der Kunden-Export (📤, DSGVO Art. 15) ausgibt, sodass Export und Import
+  zueinander passen. Gleiche Namen werden aktualisiert statt doppelt angelegt,
+  fehlerhafte Datensätze einzeln gemeldet. Der Knopf öffnet direkt die
+  Dateiauswahl, der Import startet mit der Auswahl. Eine CSV-Vorlage gibt es
+  per Knopfdruck („Beispieldatei“).
 - **Kundensuche mit Vorauswahl** — wer im Beleg-Formular nach einem Kunden
   sucht, bekommt den besten Treffer sofort ausgewählt und die Stammdaten
   übernommen; eine bereits getroffene Auswahl bleibt dabei stehen.
@@ -314,6 +320,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
 | `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen |
 | `POST`  | `/api/delivery-notes/{id}/email` | Per E-Mail senden |
+| `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln |
 
 ### Kunden, Artikel, Dashboard, Einstellungen
 | Methode | Pfad | Zweck |
