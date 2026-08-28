@@ -141,6 +141,14 @@ class ProductOut(ProductIn):
         from_attributes = True
 
 
+class CustomerImportResult(BaseModel):
+    """Ergebnis eines CSV-Imports: was ist angelegt, aktualisiert, übersprungen."""
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = []
+
+
 class ActiveUpdate(BaseModel):
     active: bool
 

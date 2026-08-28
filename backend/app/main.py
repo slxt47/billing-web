@@ -1,10 +1,12 @@
 """FastAPI-App: Rechnungs-Web-Applikation."""
+import csv
 import io
 import zipfile
 from pathlib import Path
 
 from fastapi import FastAPI, Depends, HTTPException, Form, Query, Request, UploadFile, File
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from fastapi.responses import Response, FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -437,6 +439,112 @@ def set_customer_active(customer_id: int, body: schemas.ActiveUpdate,
     if not customer:
         raise HTTPException(404, "Kunde nicht gefunden")
     return crud.set_customer_active(db, customer, body.active)
+
+
+# Spaltenüberschriften eines Imports: deutsche wie englische Schreibweisen,
+# damit sowohl ein Excel-Export der eigenen Kundenliste als auch eine von Hand
+# getippte Datei ohne Nacharbeit passt.
+CSV_COLUMNS = {
+    "name": ("name", "kunde", "kundenname", "firma", "customer", "customer_name"),
+    "email": ("email", "e-mail", "mail", "e_mail", "emailadresse"),
+    "contact_person": ("ansprechpartner", "kontakt", "contact", "contact_person"),
+    "address": ("anschrift", "adresse", "address", "strasse", "straße"),
+    "payment_term_days": ("zahlungsfrist", "zahlungsziel", "zahlungsfrist_tage",
+                          "payment_term_days", "payment_term"),
+    "skonto_percent": ("skonto", "skonto_prozent", "skonto_percent", "skonto%"),
+    "skonto_days": ("skonto_tage", "skontotage", "skonto_days", "skonto_frist"),
+}
+CSV_MAX_BYTES = 1_000_000
+CSV_MAX_ROWS = 5_000
+
+
+def _csv_text(raw: bytes) -> str:
+    """CSV-Bytes dekodieren. Excel schreibt hierzulande gern cp1252 statt UTF-8."""
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise HTTPException(400, "Datei ist nicht lesbar (weder UTF-8 noch Windows-1252)")
+
+
+def _csv_reader(text_content: str) -> csv.DictReader:
+    first_line = text_content.splitlines()[0] if text_content.strip() else ""
+    delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
+    if "\t" in first_line and first_line.count("\t") > first_line.count(delimiter):
+        delimiter = "\t"
+    return csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+
+
+def _csv_field_map(fieldnames: list[str] | None) -> dict[str, str]:
+    """Ordnet die Spalten der Datei den Feldern von CustomerIn zu."""
+    mapping: dict[str, str] = {}
+    for raw_name in fieldnames or []:
+        key = (raw_name or "").strip().lower().lstrip("\ufeff")
+        for field, aliases in CSV_COLUMNS.items():
+            if key in aliases and field not in mapping.values():
+                mapping[raw_name] = field
+                break
+    return mapping
+
+
+def _csv_number(value: str) -> str:
+    """"12,5" (deutsche Schreibweise) -> "12.5"; leer bleibt leer."""
+    return (value or "").strip().replace(",", ".")
+
+
+@app.post("/api/customers/import", response_model=schemas.CustomerImportResult)
+async def import_customers(request: Request, file: UploadFile = File(...),
+                           db: Session = Depends(get_db)):
+    """Kundenstamm aus einer CSV-Datei übernehmen.
+
+    Pflichtspalte ist der Name; alles andere ist optional. Ein bereits
+    vorhandener Kunde (gleicher Name) wird aktualisiert statt doppelt
+    angelegt. Fehlerhafte Zeilen werden übersprungen und einzeln gemeldet –
+    ein Tippfehler in Zeile 20 soll die anderen 19 nicht verhindern."""
+    raw = await file.read()
+    if not raw.strip():
+        raise HTTPException(400, "Die Datei ist leer")
+    if len(raw) > CSV_MAX_BYTES:
+        raise HTTPException(400, "Datei ist zu groß (max. 1 MB)")
+
+    reader = _csv_reader(_csv_text(raw))
+    field_map = _csv_field_map(reader.fieldnames)
+    if "name" not in field_map.values():
+        raise HTTPException(400, "Es fehlt eine Spalte mit dem Kundennamen "
+                                 "(z. B. \"name\") in der Kopfzeile")
+
+    rows: list[schemas.CustomerIn] = []
+    errors: list[str] = []
+    skipped = 0
+    for line_no, row in enumerate(reader, start=2):
+        if line_no - 1 > CSV_MAX_ROWS:
+            raise HTTPException(400, f"Zu viele Zeilen (max. {CSV_MAX_ROWS})")
+        values = {}
+        for raw_name, field in field_map.items():
+            values[field] = (row.get(raw_name) or "").strip()
+        if not values.get("name"):
+            skipped += 1
+            continue
+        for field in ("payment_term_days", "skonto_percent", "skonto_days"):
+            if field in values:
+                values[field] = _csv_number(values[field])
+            if not values.get(field):
+                values.pop(field, None)
+        try:
+            rows.append(schemas.CustomerIn(**values))
+        except ValidationError:
+            skipped += 1
+            if len(errors) < 20:
+                errors.append(f"Zeile {line_no}: ungültige Werte "
+                              f"({values.get('name', '')})".strip())
+
+    created, updated = crud.import_customers(db, rows)
+    crud.log_action(db, auth.current_user(request) or "", "import", "customer", None,
+                    f"CSV-Import: {created} neu, {updated} aktualisiert, "
+                    f"{skipped} übersprungen")
+    return schemas.CustomerImportResult(created=created, updated=updated,
+                                        skipped=skipped, errors=errors)
 
 
 @app.get("/api/customers/{customer_id}/export", response_model=schemas.CustomerExportOut)
