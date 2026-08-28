@@ -207,6 +207,44 @@ def test_import_reads_a_json_list_and_updates_by_name(user_client):
     assert customers["Neu AG"]["payment_term_days"] == 21
 
 
+def test_import_accepts_the_json_example_file(user_client):
+    """Die Vorlage, die das Frontend anbietet (app.js: EXAMPLE_CUSTOMERS),
+    muss sich ohne Nacharbeit wieder einlesen lassen."""
+    payload = {"customers": [
+        {"name": "Muster GmbH", "email": "info@muster.example",
+         "contact_person": "Frau Muster", "address": "Musterweg 1, 12345 Musterstadt",
+         "payment_term_days": 30, "skonto_percent": 2, "skonto_days": 7},
+        {"name": "Beispiel AG", "email": "kontakt@beispiel.example",
+         "contact_person": "Herr Beispiel", "address": "Beispielstr. 2, 54321 Beispielstadt",
+         "payment_term_days": 14, "skonto_percent": 0, "skonto_days": 0},
+    ]}
+    result = user_client.post(
+        "/api/customers/import",
+        files={"file": ("kunden-vorlage.json", json.dumps(payload).encode(),
+                        "application/json")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (2, 0, 0)
+
+    customers = {c["name"]: c for c in user_client.get("/api/customers").json()}
+    assert customers["Muster GmbH"]["payment_term_days"] == 30
+    assert customers["Muster GmbH"]["skonto_days"] == 7
+    assert customers["Beispiel AG"]["email"] == "kontakt@beispiel.example"
+
+
+def test_import_accepts_the_csv_example_file(user_client):
+    """Gegenstück zur JSON-Vorlage: dieselben Daten als CSV (app.js:
+    EXAMPLE_CSV_HEADER)."""
+    csv_content = (
+        "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage\r\n"
+        "Muster GmbH;info@muster.example;Frau Muster;"
+        "Musterweg 1, 12345 Musterstadt;30;2;7\r\n"
+        "Beispiel AG;kontakt@beispiel.example;Herr Beispiel;"
+        "Beispielstr. 2, 54321 Beispielstadt;14;0;0\r\n"
+    )
+    result = upload_csv(user_client, csv_content, name="kunden-vorlage.csv").json()
+    assert (result["created"], result["updated"], result["skipped"]) == (2, 0, 0)
+
+
 def test_import_rejects_broken_json(user_client):
     response = user_client.post(
         "/api/customers/import",

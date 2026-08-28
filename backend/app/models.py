@@ -312,8 +312,10 @@ class QuoteItem(Base):
         return round(float(self.quantity) * float(self.unit_price), 2)
 
 
-# Mögliche Status eines Lieferscheins
+# Mögliche Status eines Lieferscheins. "abgeschlossen" setzt der PDF-Download:
+# wer den Lieferschein ausdruckt, hat ihn aus der Hand gegeben.
 DN_OPEN = "offen"
+DN_DONE = "abgeschlossen"
 DN_CANCELLED = "storniert"
 
 

@@ -307,6 +307,30 @@ nav button.has-draft.active::after, nav button.has-draft:hover::after { color: #
 :root[data-theme="light"] .badge.ueberfaellig { background: #ffe9e9; }
 :root[data-theme="light"] input[type="date"] { color-scheme: light; }
 
+/* ===== Kleines Auswahlfenster (z. B. Beispieldatei: CSV oder JSON) ===== */
+.popover-anchor { position: relative; display: inline-block; }
+.popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 12rem;
+  padding: 0.7rem 0.8rem 0.8rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.popover .popover-title {
+  margin: 0 0 0.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.popover button { margin-top: 0; text-align: left; }
+
 /* ===== Ausgeblendetes bleibt ausgeblendet =====
    Das hidden-Attribut muss stärker sein als die eigenen Layout-Regeln:
    die Hinweisbanner setzen `display: flex`, und Autoren-CSS schlägt die

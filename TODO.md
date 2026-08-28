@@ -1,273 +1,322 @@
 ================================================================================
-RECHNUNGS-APP - DEVELOPMENT ROADMAP (TODO.md)
+RECHNUNGS-APP – ROADMAP (TODO.md)
 ================================================================================
 
-+---------------------+
-| 📋 DEVELOPMENT TASKS |
-+---------------------+
+Stand: 2026-08-28
 
-Status re-audited against the actual code in backend/app/ on 2026-08-27.
-An item is only marked [X] if it is verifiably implemented — the file name
-and, where useful, the function are named next to it so the claim can be
-checked in seconds. The 2026-08-27 pass added the security middleware layer
-(CSRF/rate limiting/headers), structured logging, API pagination, the
-non-root service user, the test suites (139 backend + 27 frontend tests) and
-the GitHub Actions pipeline; those lines moved from [ ] to [X] and the docs
-were updated to match. It also delivered the four [FEATURE REQUEST] items at
-the bottom of this file and both entries from the former IDEAS section (live
-presence indicator, payment-confirmation alignment).
+KONVENTIONEN
+------------
+[X] = umgesetzt und im Code nachprüfbar. Dahinter stehen Datei und, wo es
+      hilft, die Funktion, damit sich die Aussage in Sekunden prüfen lässt.
+[ ] = offen.
 
-The 2026-08-28 pass worked through the NEW IDEAS block at the bottom of this
-file: the logo upload no longer wipes unsaved company data, the customer list
-no longer runs past the edge of the card, customers can be imported from CSV,
-"History" is now "Rechnungsübersicht", the lock/presence/restored-draft
-banners can be dismissed, and a customer search now preselects its best hit.
-Test counts are up to 155 backend + 41 frontend tests.
+Alles in dieser Datei ist deutsch. Neue Punkte kommen als [ ] in den
+passenden Bereich unten – nicht als neuer Block ans Dateiende. Ist ein Punkt
+erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 
-Directly afterwards (same day, second round): delivery notes can be turned
-into quotes, the empty hint banners no longer show as coloured bars, and the
-customer import takes JSON as well as CSV without a separate "choose file"
-step.
 
-[SECURITY & PRODUCTION]
-[X] PBKDF2 password hashing (200k iterations, per-user salt)
-[X] Login brute-force lockout (5 failed attempts -> 5 min lock, per IP+user)
-[X] Guided production setup script (scripts/setup-prod.sh): strong secrets,
-    optional real SMTP, optional Let's Encrypt cert via certbot
-[X] GDPR/DSGVO: privacy notice page (/datenschutz)
-[X] GDPR/DSGVO: per-customer data export (Art. 15, admin-only)
-[X] GDPR/DSGVO: customer anonymization (Art. 17, admin-only)
-[X] GDPR/DSGVO: audit log of access to personal data
-[X] Backup path-traversal protection (strict filename validation)
-[X] CSRF protection (security.csrf_middleware): per-session token, required
-    in the X-CSRF-Token header on every writing request; /login checks the
-    csrf_token form field instead. Toggle via CSRF_ENABLED.
-[X] General API rate limiting (security.rate_limit_middleware): sliding
-    window per IP, 600/60s by default plus a stricter 20/300s bucket for
-    POST /login; answers 429 with Retry-After. Configurable via
-    RATE_LIMIT_* in .env.
-[X] Security response headers (security.apply_security_headers): CSP,
+--------------------------------------------------------------------------------
+1. SICHERHEIT & BETRIEB
+--------------------------------------------------------------------------------
+[X] PBKDF2-Passwort-Hashing (200.000 Iterationen, Salt je Benutzer)
+[X] Login-Sperre gegen Brute Force (5 Fehlversuche -> 5 min Sperre, je IP
+    und Benutzer)
+[X] Geführtes Produktiv-Setup (scripts/setup-prod.sh): starke Geheimnisse,
+    optional echtes SMTP, optional Let's-Encrypt-Zertifikat über certbot
+[X] DSGVO: Datenschutzhinweis (/datenschutz)
+[X] DSGVO: Datenexport je Kunde (Art. 15, nur Admin)
+[X] DSGVO: Anonymisierung eines Kunden (Art. 17, nur Admin)
+[X] DSGVO: Audit-Log über Zugriffe auf personenbezogene Daten
+[X] Backup-Zugriff gegen Path Traversal geschützt (strenge Dateinamensprüfung)
+[X] CSRF-Schutz (security.csrf_middleware): Token je Session, Pflicht im
+    Header X-CSRF-Token bei jedem schreibenden Request; /login prüft
+    stattdessen das Formularfeld csrf_token. Schalter: CSRF_ENABLED.
+[X] Rate Limit für die API (security.rate_limit_middleware): gleitendes
+    Fenster je IP, standardmäßig 600/60s, dazu ein strengerer Topf mit
+    20/300s für POST /login; antwortet mit 429 und Retry-After.
+    Konfigurierbar über RATE_LIMIT_* in .env.
+[X] Security-Header (security.apply_security_headers): CSP,
     X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
-    Permissions-Policy, Cross-Origin-Opener-Policy, plus HSTS on HTTPS.
-[X] Session cookie hardening: SameSite=Strict, max_age (SESSION_MAX_AGE,
-    12h default), secure flag via SESSION_HTTPS_ONLY (set by
-    scripts/setup-prod.sh); session cleared on login against fixation.
-[X] Container/process no longer runs as root (backend/Dockerfile creates and
-    switches to user `rechnung`; scripts/lib-common.sh creates the matching
-    host user and hands the project directory over to it)
-[X] Frontend escapes database values before rendering (app.js: esc()); a
-    customer name or article description containing HTML can no longer break
-    out of the table markup. Item rows set their values via the DOM.
-[ ] Automated security audit / external pen test
-
-[CORE FUNCTIONALITY]
-[X] Server-side input validation (Pydantic schemas on every request body)
-[X] Collision-free document numbering across invoices/quotes/delivery notes
-    (shared per-year sequence, PostgreSQL advisory lock)
-[X] Edit lock on invoices (prevents two users editing the same invoice at
-    once, auto-expires after 5 minutes)
-[X] Live presence indicator ("someone else has this open"): a client with a
-    document open sends a heartbeat every 10s to
-    POST /api/presence/{doc_type}/{doc_id} and gets back everyone else on
-    that document; the form shows a banner and the lists mark those rows.
-    Covers invoices, quotes AND delivery notes — the latter two have no edit
-    lock at all. Entries expire 45s after the last heartbeat, so a closed
-    tab cleans itself up. Polling, not WebSockets (see
-    Technical_documentation.md for why). Table `presence`, crud.touch_presence.
-[X] Partial payments with automatic status transitions (offen -> teilbezahlt
-    -> bezahlt)
-[X] Discount (%) and Kleinunternehmer / §19 UStG mode (no VAT)
-[X] Skonto (early-payment discount) calculation and PDF display
-[X] Idempotent schema migrations on startup (ADD COLUMN IF NOT EXISTS)
-[X] Automated test suite: 155 pytest tests in backend/tests/ against a
-    temporary SQLite DB (conftest.py) — invoices, quotes, delivery notes,
-    customers/products (incl. the CSV/JSON import), admin endpoints, audit log and
-    the security layer. Run with `python -m pytest` in backend/. Plus 41
-    frontend tests in backend/tests/frontend/ that drive the real index.html +
-    app.js in jsdom (customer picker incl. best-match preselection, draft
-    cache, dismissible banners, logo upload, customer import, list filters,
-    CSRF header, escaping) — `npm install && npm test`, needs Node >= 20.
-[X] Centralized/structured error handling & logging (logging_setup.py):
-    JSON log lines, per-request X-Request-ID carried into every line and
-    every error body, uniform {"detail", "request_id"} responses for HTTP,
-    validation and unhandled errors.
-
-[DOCUMENTS: INVOICES / QUOTES / DELIVERY NOTES]
-[X] Edit an existing (non-cancelled) invoice
-[X] Cancel (storno) an invoice and revert back to "offen"
-[X] Quotes (Angebote): create, edit, PDF, email, status, convert to invoice
-[X] Delivery notes (Lieferscheine): create, edit, PDF, email, status,
-    generate from an existing invoice, and convert into a quote
-    (POST /api/delivery-notes/{id}/convert-to-quote, "zu Angebot" in the
-    list): quantities from the delivery note, prices from the product
-    catalogue where the description matches, otherwise 0. Reuses the running
-    number (LS-2026-0007 -> AN-2026-0007) and falls back to the next free one
-    if that number is already taken.
-[X] Invoice/quote/delivery-note PDF generation incl. GiroCode/EPC-QR
-[X] Email sending for invoices, quotes, delivery notes, payment reminders,
-    and automatic payment confirmation on full settlement — fires on BOTH
-    ways of settling an invoice now (POST .../payment and
-    PATCH .../status {"status":"bezahlt"}), only on the transition, and a
-    failing SMTP server never breaks the payment (main._confirm_payment_if_settled)
-[X] Monthly export as ZIP (PDF per invoice + CSV summary)
-[ ] Recurring invoices
-[ ] Approval workflow
-[ ] Partial refunds / credit notes as a distinct document type (only
-    cancel-and-revert exists today)
-[ ] Multi-currency support (EUR only)
-[ ] Custom PDF templates
-[ ] Document attachments on invoices
-
-[CUSTOMER & PRODUCT MANAGEMENT]
-[X] Customer master data with default payment term + skonto defaults
-[X] Activate/deactivate customers and products (soft-disable, no delete)
-[ ] Customer groups
-[ ] Credit limits
-[ ] Customer notes field
-[X] Customer import from CSV *or* JSON (POST /api/customers/import, "Kunden
-    importieren" in the customer view): column/key names mapped against German
-    and English spellings, `;`/`,`/tab delimiter, UTF-8 or Windows-1252,
-    existing customers matched by name are updated instead of duplicated, bad
-    records skipped and reported. JSON includes the file that the per-customer
-    DSGVO export produces, so export and import fit together. The button opens
-    the file dialog directly; picking the file starts the import. CSV template
-    via "Beispieldatei".
-[ ] Import for products, and a bulk CSV export for both
-
-[REPORTING]
-[X] Dashboard KPIs (revenue, open amount, overdue amount, 6-month chart)
-[X] History filtering (status/overdue) and column sorting — the tab is now
-    called "Rechnungsübersicht" (the view id `view-history` stayed)
-[ ] Advanced/custom report builder
-[ ] Dedicated tax report / VAT return export
-[ ] Profit & loss reporting
-
-[SYSTEM / DEPLOYMENT]
-[X] Docker Compose stack (web, db, mailhog, proxy, backup — 5 containers)
-[X] Automated daily backups (pg_dump, gzip, 14-day retention)
-[X] Backup management UI for admins (list, download, restore with double
-    confirmation)
-[X] Guided setup scripts (scripts/setup-test.sh, scripts/setup-prod.sh)
-[X] CI pipeline (.github/workflows/ci.yml): backend tests, frontend tests,
-    static checks (compileall, bash -n/shellcheck, node --check) and a Docker
-    image build that asserts the container UID is not 0 and that compose
-    config is valid. Runs on every push and pull request. (No CD/deploy
-    stage.)
-[ ] Application monitoring / observability (structured logs exist, but no
-    metrics endpoint, dashboard or alerting)
-[ ] Horizontal scaling / load balancing (single `web` container by design;
-    in-memory login-lockout state would not survive multiple replicas)
-[ ] Response caching layer
-[X] API pagination: ?limit=(1..MAX_PAGE_SIZE)&offset= on invoices, quotes,
-    delivery notes, customers, products and the audit log; the total always
-    comes back in the X-Total-Count header. Without ?limit the full list is
-    returned, so older callers keep working.
-
-[DOCUMENTATION]
-[X] README.md reflects the actual current feature set
-[X] Technical_documentation.md reflects the actual current architecture/API
-[X] Dedicated troubleshooting guide (TROUBLESHOOTING.md)
-[ ] Diagrams beyond the ASCII architecture sketch in Technical_documentation.md
-
-[KNOWN ISSUES]
-[ ] Self-signed certificate by default -> browser warning until
-    scripts/setup-prod.sh sets up a real Let's Encrypt cert
-[ ] MailHog is the default mail transport (no real delivery) until SMTP_* is
-    configured for a real provider
-[ ] Default admin/admin and test-user credentials must be changed before any
-    real deployment (setup-prod.sh generates strong ones automatically)
-[ ] Login-lockout AND rate-limit counters are both in-memory: correct for
-    the single `web` container the compose file defines, but they would need
-    a shared store (Redis o. ä.) before scaling out
-
-[FEATURE REQUEST]
-[X] Customer selection when creating an **Angebot** or **Lieferschein**, same
-    as for **Rechnungen** — one shared, searchable customer picker
-    (app.js: registerCustomerPicker) on all three forms; only active
-    customers are offered and picking one fills in the master data.
-[X] **Smart caching** of entered data: invoice/quote/delivery-note forms are
-    saved to localStorage as you type (debounced, key rechnung.drafts.v1)
-    and restored on reload; drafts expire after 7 days and never leave the
-    browser.
-[X] **Search and filter** in all relevant views and selection fields:
-    invoice/quote/delivery-note lists (search + status filter), customers and
-    products (search + active filter), users, audit log, and the customer
-    picker on all three document forms.
-[X] Dedicated non-root user for the test and production environment:
-    scripts/lib-common.sh creates the host user `rechnung` (idempotent, both
-    setup scripts use it), hands the project files to it and writes the
-    matching APP_UID/APP_GID into .env so the container runs under the same
-    identity. Falls back gracefully with a warning if it cannot get root.
+    Permissions-Policy, Cross-Origin-Opener-Policy, dazu HSTS bei HTTPS
+[X] Gehärtetes Session-Cookie: SameSite=Strict, max_age (SESSION_MAX_AGE,
+    12 h Vorgabe), secure-Flag über SESSION_HTTPS_ONLY (setzt
+    scripts/setup-prod.sh); die Session wird beim Login geleert, gegen
+    Session Fixation
+[X] Der Dienst läuft nicht als root (backend/Dockerfile legt den Benutzer
+    `rechnung` an und wechselt zu ihm; scripts/lib-common.sh legt den
+    passenden Host-Benutzer an und übergibt ihm das Projektverzeichnis)
+[X] Das Frontend maskiert Datenbankwerte vor der Ausgabe (app.js: esc()):
+    HTML in einem Kundennamen oder einer Artikelbeschreibung kann die
+    Tabelle nicht mehr aufbrechen, Positionszeilen werden über das DOM
+    gefüllt
+[ ] Automatisiertes Security-Audit / externer Pentest
 
 
----------------------------------------------------------------------------
-STILL OPEN (unchanged by the 2026-08-27 and 2026-08-28 passes)
----------------------------------------------------------------------------
-The remaining [ ] items are real product/infrastructure work, not oversights:
-recurring invoices, approval workflow, credit notes as their own document
-type, multi-currency, custom PDF templates, document attachments, customer
-groups, credit limits, customer notes, import for products (customers can be
-imported from CSV/JSON since 2026-08-28) and bulk CSV export, a custom report
-builder, a VAT-return export, P&L reporting, monitoring, a response cache,
-horizontal scaling (needs shared state for the login lockout and the
-rate-limit counters), an external pen test, and diagrams beyond the ASCII
-sketch. The known issues around self-signed certificates, MailHog as the
-default transport and the default credentials are all addressed by
-scripts/setup-prod.sh but remain the defaults until it is run.
-
----------------------------------------------------------------------------
-IDEAS / NOT YET SCHEDULED
----------------------------------------------------------------------------
-Both former entries here were implemented on 2026-08-27 and moved into the
-lists above:
-
-  * Live collaborative indicator -> "someone else has this open" now shows as
-    a banner over the form and as a marker in the lists, for invoices, quotes
-    and delivery notes. What is still NOT there is field-level merge: two
-    people editing the same quote or delivery note can still overwrite each
-    other, they just see each other now. Invoices remain protected by the
-    edit lock. A real lock for quotes/delivery notes, or per-field merging,
-    would be the next step if that turns out to hurt in practice.
-  * Payment-confirmation email -> now sent from whichever path settles the
-    invoice, so the customer gets the same mail whether the clerk records a
-    payment or flips the status to "bezahlt".
-
-Nothing else is currently parked here. New ideas go below this line.
-
-
-NEW IDEAS (all done on 2026-08-28):
-[X] Uploading a logo wiped every field under "Firmendaten": the upload handler
-    called loadSettings(), which re-filled the form from the server and threw
-    away whatever was typed but not yet saved. It now only refreshes the
-    preview (app.js: showLogo).
-[X] The customer list ran past the edge of the card: the wide lists sit in a
-    `.table-scroll` container now (own horizontal scrollbar, the page itself
-    never scrolls sideways) and the address column wraps (`.cell-wrap`).
-[X] Customer import: CSV upload in the "Kunden" view, see the
-    [CUSTOMER & PRODUCT MANAGEMENT] section above.
-[X] "History" is now called "Rechnungsübersicht" (label only; ids, routes and
-    the server-side search are unchanged).
-[X] The hints above the invoice/quote/delivery-note forms — edit lock,
-    "someone else is here" and "restored draft" — each have a "✕" now.
-    Hiding a draft hint does NOT discard the draft; a hidden banner comes
-    back as soon as it has something new to say (app.js: showBanner /
-    hideBanner / dismissedBanners).
-[X] Searching for a customer now preselects the best hit instead of leaving
-    "– neuen Kunden eingeben –" selected, and fills the master data from it.
-    An already-picked customer that still matches the search is kept, and the
-    data is only re-applied when the best hit actually changes, so typing on
-    does not overwrite fields edited by hand.
+--------------------------------------------------------------------------------
+2. KERNFUNKTIONEN
+--------------------------------------------------------------------------------
+[X] Serverseitige Validierung (Pydantic-Schemas für jeden Request-Body)
+[X] Kollisionsfreie Belegnummern über Rechnungen, Angebote und
+    Lieferscheine hinweg (gemeinsame Jahressequenz, PostgreSQL Advisory Lock)
+[X] Bearbeitungssperre für Rechnungen (verhindert, dass zwei Personen
+    dieselbe Rechnung gleichzeitig bearbeiten, läuft nach 5 Minuten ab)
+[X] Anwesenheitsanzeige („jemand anderes hat das offen“): ein Client mit
+    offenem Beleg meldet sich alle 10 s per
+    POST /api/presence/{doc_type}/{doc_id} und bekommt alle anderen auf
+    diesem Beleg zurück; das Formular zeigt ein Banner, die Listen
+    markieren die betroffenen Zeilen. Gilt für Rechnungen, Angebote UND
+    Lieferscheine – die beiden letzten haben gar keine Bearbeitungssperre.
+    Einträge verfallen 45 s nach dem letzten Lebenszeichen, ein
+    geschlossener Tab räumt sich also selbst auf. Polling statt WebSockets
+    (Begründung in Technical_documentation.md). Tabelle `presence`,
+    crud.touch_presence.
+[X] Teilzahlungen mit automatischem Statuswechsel (offen -> teilbezahlt ->
+    bezahlt)
+[X] Rabatt (%) und Kleinunternehmer-/§-19-UStG-Modus (ohne Umsatzsteuer)
+[X] Skonto-Berechnung samt Ausweis im PDF
+[X] Idempotente Migrationen beim Start (ADD COLUMN IF NOT EXISTS)
+[X] Zwischenspeichern der Eingaben: Rechnungs-, Angebots- und
+    Lieferscheinformulare werden beim Tippen in den localStorage geschrieben
+    (entprellt, Schlüssel rechnung.drafts.v1) und beim Neuladen
+    wiederhergestellt; Entwürfe verfallen nach 7 Tagen und verlassen den
+    Browser nie
+[X] Suchen und Filtern in allen relevanten Ansichten und Auswahlfeldern:
+    Rechnungs-, Angebots- und Lieferscheinlisten (Suche + Statusfilter),
+    Kunden und Artikel (Suche + Aktiv-Filter), Benutzer, Audit-Log und die
+    Kundenauswahl in allen drei Belegformularen
+[X] Hinweisbanner über den Formularen – Sperre, Anwesenheit,
+    wiederhergestellter Entwurf – lassen sich mit „✕“ schließen (app.js:
+    showBanner / hideBanner / dismissedBanners). Ein weggeklicktes
+    Entwurfsbanner verwirft den Entwurf nicht und kommt zurück, sobald es
+    etwas Neues zu melden hat. Leere Banner stehen nicht mehr als farbige
+    Balken über den Formularen: `[hidden] { display: none !important; }` am
+    Ende von styles.css schlägt das `display: flex` der Banner-Klassen.
+[X] Zentrales Fehler- und Logging-Konzept (logging_setup.py): JSON-Logzeilen,
+    eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
+    einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
+    und unbehandelte Fehler
+[X] Automatisierte Tests: 161 pytest-Tests in backend/tests/ gegen eine
+    temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
+    Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import), Admin-Endpunkte,
+    Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
+    backend/. Dazu 51 Frontend-Tests in backend/tests/frontend/, die die
+    echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
+    Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
+    Logo-Upload, Kundenimport, Beispieldateien als CSV/JSON, Listenfilter,
+    Lieferscheinliste, Umwandlung Angebot -> Rechnung, Sprung in die
+    Rechnungsübersicht nach dem Speichern, CSRF-Header, Maskierung) –
+    `npm install && npm test`, braucht Node >= 20
 
 
-NEUE PUNKTE (2026-08-28, zweiter Durchgang):
-[X] Lieferschein -> Angebot ("zu Angebot" in der Lieferscheinliste). "zu
-    Rechnung" gibt es dort bewusst nicht; im Angebot bleibt es unverändert.
-[X] Die leeren Hinweisbanner (orange = Sperre/Anwesenheit, blau = Entwurf)
-    standen dauerhaft über den Formularen: `.warn-banner`/`.presence-banner`/
-    `.draft-banner` setzen `display: flex`, und Autoren-CSS schlägt die
-    Browser-Vorgabe `[hidden] { display: none }`. `[hidden] { display: none
-    !important; }` am Ende von styles.css blendet sie wieder aus; ein Test
-    rechnet dafür mit der echten styles.css statt nur das Attribut zu prüfen.
-[X] Import nimmt jetzt CSV und JSON (inkl. der Datei aus dem Kunden-Export),
-    und die sichtbare Dateiauswahl ist weg: der Knopf öffnet den Dialog, die
-    Auswahl startet den Import.
+--------------------------------------------------------------------------------
+3. BELEGE: RECHNUNGEN / ANGEBOTE / LIEFERSCHEINE
+--------------------------------------------------------------------------------
+[X] Bestehende (nicht stornierte) Rechnung bearbeiten
+[X] Nach dem Speichern einer Rechnung – neu angelegt wie fertig bearbeitet –
+    geht es in die Rechnungsübersicht; die Nummer wird dort bestätigt
+    (app.js: historyNotice, Absenden von #invoice-form). Die Meldung
+    verschwindet beim nächsten Ansichtswechsel.
+[X] Rechnung stornieren und zurück auf „offen“ setzen
+[X] Angebote: anlegen, bearbeiten, PDF, E-Mail, Status, in eine Rechnung
+    umwandeln. Nach dem Umwandeln landet man direkt in der
+    Rechnungsübersicht, in der die neue Rechnung schon steht; die Meldung
+    nennt ihre Nummer (app.js: quoteAction, act === "convert").
+[X] Lieferscheine: anlegen, bearbeiten, PDF, E-Mail, Status, aus einer
+    bestehenden Rechnung erzeugen und in ein Angebot umwandeln
+    (POST /api/delivery-notes/{id}/convert-to-quote, „zu Angebot“ in der
+    Liste): Mengen aus dem Lieferschein, Preise aus dem Artikelstamm, wo die
+    Beschreibung passt, sonst 0. Die laufende Nummer wird übernommen
+    (LS-2026-0007 -> AN-2026-0007), bei Kollision die nächste freie. Ein
+    „zu Rechnung“ gibt es beim Lieferschein bewusst nicht.
+[X] Lieferschein-Status: offen, abgeschlossen (grüne Plakette) oder storniert
+    (models.DN_OPEN/DN_DONE/DN_CANCELLED). Der PDF-Download schließt einen
+    offenen Lieferschein ab – wer ihn ausdruckt, gibt ihn aus der Hand –, ein
+    stornierter bleibt storniert (main.download_delivery_note_pdf). „wieder
+    öffnen“ setzt zurück auf offen, stornieren bleibt möglich, und der
+    Statusfilter der Liste kennt den neuen Wert.
+[X] Gemeinsame, durchsuchbare Kundenauswahl in allen drei Formularen
+    (app.js: registerCustomerPicker): nur aktive Kunden, die Auswahl füllt
+    die Stammdaten. Die Suche wählt den besten Treffer vor, behält einen
+    bereits gewählten Kunden, der weiter passt, und übernimmt die Daten nur
+    dann neu, wenn sich der beste Treffer wirklich ändert – Weitertippen
+    überschreibt also keine von Hand geänderten Felder.
+[X] PDF für Rechnung, Angebot und Lieferschein inkl. GiroCode/EPC-QR
+[X] E-Mail-Versand für Rechnungen, Angebote, Lieferscheine,
+    Zahlungserinnerungen und die automatische Zahlungsbestätigung beim
+    vollständigen Ausgleich – ausgelöst über BEIDE Wege (POST .../payment und
+    PATCH .../status {"status":"bezahlt"}), nur beim Übergang, und ein
+    ausgefallener SMTP-Server bricht die Zahlung nie ab
+    (main._confirm_payment_if_settled)
+[X] Monatsexport als ZIP (ein PDF je Rechnung plus CSV-Zusammenfassung)
+[ ] Wiederkehrende Rechnungen
+[ ] Freigabe-Workflow
+[ ] Teilgutschriften / Gutschriften als eigene Belegart (heute gibt es nur
+    Storno mit Rücksetzen)
+[ ] Mehrwährungsfähigkeit (bisher nur EUR)
+[ ] Eigene PDF-Vorlagen
+[ ] Dateianhänge an Rechnungen
+
+
+--------------------------------------------------------------------------------
+4. KUNDEN & ARTIKEL
+--------------------------------------------------------------------------------
+[X] Kundenstammdaten mit Zahlungsziel und Skonto-Vorgaben
+[X] Kunden und Artikel aktiv/inaktiv schalten (kein Löschen)
+[X] Kundenimport aus CSV *oder* JSON (POST /api/customers/import, „Kunden
+    importieren“ in der Kundenansicht): Spalten- und Schlüsselnamen werden
+    gegen deutsche und englische Schreibweisen gemappt, Trennzeichen
+    `;`/`,`/Tab, UTF-8 oder Windows-1252, vorhandene Kunden werden über den
+    Namen erkannt und aktualisiert statt doppelt angelegt, fehlerhafte
+    Datensätze werden übersprungen und gemeldet. JSON versteht auch die
+    Datei aus dem DSGVO-Export je Kunde, Export und Import passen also
+    zusammen. Der Knopf öffnet direkt den Dateidialog, die Auswahl startet
+    den Import; eine sichtbare Dateiauswahl gibt es nicht mehr.
+[X] Vorlage für den Import in beiden Formaten: „📄 Beispieldatei
+    herunterladen“ öffnet ein kleines Auswahlfenster (CSV oder JSON) und
+    liefert kunden-vorlage.csv bzw. kunden-vorlage.json. Beide entstehen aus
+    denselben Beispieldaten (app.js: EXAMPLE_CUSTOMERS), und je ein
+    Backend-Test liest sie wieder ein, damit die Vorlage nicht vom Import
+    abdriftet. Klick daneben oder Escape schließt das Fenster.
+[X] Die Kundenliste läuft nicht mehr über den Kartenrand hinaus: die breiten
+    Listen sitzen in einem `.table-scroll`-Container mit eigener
+    Querscrollleiste, die Adressspalte bricht um (`.cell-wrap`)
+[X] Ein Logo-Upload löscht keine ungespeicherten Firmendaten mehr: der
+    Handler frischt nur noch die Vorschau auf, statt das Formular neu vom
+    Server zu füllen (app.js: showLogo)
+[ ] Kundengruppen
+[ ] Kreditlimits
+[ ] Notizfeld je Kunde
+[ ] Artikelimport und ein CSV-Massenexport für Kunden und Artikel
+
+
+--------------------------------------------------------------------------------
+5. AUSWERTUNGEN
+--------------------------------------------------------------------------------
+[X] Dashboard-Kennzahlen (Umsatz, offener Betrag, überfälliger Betrag,
+    6-Monats-Diagramm)
+[X] Rechnungsübersicht mit Status-/Überfällig-Filter und Spaltensortierung.
+    Der Reiter heißt „Rechnungsübersicht“ (früher „History“); die View-ID
+    `view-history`, die Routen und die serverseitige Suche blieben
+    unverändert.
+[ ] Freier Report-Builder
+[ ] Eigener Steuerbericht / UStVA-Export
+[ ] Gewinn-und-Verlust-Auswertung
+
+
+--------------------------------------------------------------------------------
+6. SYSTEM & DEPLOYMENT
+--------------------------------------------------------------------------------
+[X] Docker-Compose-Stack (web, db, mailhog, proxy, backup – 5 Container)
+[X] Tägliche automatische Backups (pg_dump, gzip, 14 Tage Aufbewahrung)
+[X] Backup-Verwaltung für Admins (auflisten, herunterladen, wiederherstellen
+    mit doppelter Bestätigung)
+[X] Geführte Setup-Skripte (scripts/setup-test.sh, scripts/setup-prod.sh)
+[X] Eigener Nicht-root-Benutzer für Test- und Produktivumgebung:
+    scripts/lib-common.sh legt den Host-Benutzer `rechnung` an (idempotent,
+    beide Setup-Skripte nutzen es), übergibt ihm die Projektdateien und
+    schreibt APP_UID/APP_GID in die .env, damit der Container unter
+    derselben Identität läuft. Ohne root-Rechte bricht es nicht ab, sondern
+    warnt.
+[X] CI-Pipeline (.github/workflows/ci.yml): Backend-Tests, Frontend-Tests,
+    statische Prüfungen (compileall, bash -n/shellcheck, node --check) und
+    ein Docker-Image-Build, der prüft, dass die Container-UID nicht 0 ist
+    und die Compose-Konfiguration gültig ist. Läuft bei jedem Push und
+    Pull Request. (Keine Deploy-Stufe.)
+[X] API-Pagination: ?limit=(1..MAX_PAGE_SIZE)&offset= für Rechnungen,
+    Angebote, Lieferscheine, Kunden, Artikel und das Audit-Log; die
+    Gesamtzahl kommt immer im Header X-Total-Count. Ohne ?limit kommt die
+    ganze Liste, ältere Aufrufer laufen also weiter.
+[ ] Monitoring / Observability (strukturierte Logs gibt es, aber keinen
+    Metrics-Endpunkt, kein Dashboard, kein Alerting)
+[ ] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
+    `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
+    mehrere Repliken nicht überstehen)
+[ ] Response-Cache
+
+
+--------------------------------------------------------------------------------
+7. DOKUMENTATION
+--------------------------------------------------------------------------------
+[X] README.md beschreibt den tatsächlichen Funktionsumfang
+[X] Technical_documentation.md beschreibt die tatsächliche Architektur/API
+[X] Eigener Leitfaden zur Fehlersuche (TROUBLESHOOTING.md)
+[ ] Diagramme über die ASCII-Skizze in Technical_documentation.md hinaus
+
+
+--------------------------------------------------------------------------------
+8. BEKANNTE EINSCHRÄNKUNGEN
+--------------------------------------------------------------------------------
+[ ] Standardmäßig ein selbstsigniertes Zertifikat -> Browserwarnung, bis
+    scripts/setup-prod.sh ein echtes Let's-Encrypt-Zertifikat einrichtet
+[ ] MailHog ist der Standard-Mailtransport (keine echte Zustellung), bis
+    SMTP_* auf einen echten Anbieter zeigt
+[ ] Die Zugänge admin/admin und der Testbenutzer müssen vor jedem echten
+    Einsatz geändert werden (setup-prod.sh erzeugt automatisch starke)
+[ ] Login-Sperre und Rate-Limit-Zähler liegen beide im Prozessspeicher:
+    richtig für den einen `web`-Container aus der Compose-Datei, vor einer
+    Skalierung bräuchten sie einen gemeinsamen Speicher (Redis o. Ä.)
+
+
+--------------------------------------------------------------------------------
+9. IDEEN / NOCH NICHT EINGEPLANT
+--------------------------------------------------------------------------------
+[ ] Feldweises Zusammenführen oder eine echte Sperre für Angebote und
+    Lieferscheine: zwei Personen sehen sich dort zwar gegenseitig
+    (Anwesenheitsanzeige), können sich aber weiterhin überschreiben.
+    Rechnungen schützt die Bearbeitungssperre. Nächster Schritt, falls das
+    im Alltag weh tut.
+
+Sonst ist hier nichts geparkt.
+
+
+--------------------------------------------------------------------------------
+10. CHANGELOG
+--------------------------------------------------------------------------------
+2026-08-28, vierter Durchgang
+  * Beispieldatei für den Kundenimport gibt es jetzt als CSV und als JSON,
+    das Format wird in einem kleinen Fenster abgefragt (Abschnitt 4).
+  * Lieferscheine kennen den Status „abgeschlossen“ (grün); der PDF-Download
+    setzt ihn (Abschnitt 3).
+  * Nach dem Speichern einer Rechnung geht es in die Rechnungsübersicht
+    (Abschnitt 3).
+  * Teststand: 161 Backend- und 51 Frontend-Tests.
+
+2026-08-28, dritter Durchgang
+  * Angebot -> Rechnung führt jetzt in die Rechnungsübersicht, die Meldung
+    nennt die neue Rechnungsnummer (Abschnitt 3). Dazu ein Frontend-Test,
+    Stand nun 42 Frontend-Tests.
+  * Diese Datei aufgeräumt: durchgehend deutsch, einheitliche Abschnitte und
+    [X]/[ ]-Schreibweise, die angehängten Blöcke „NEW IDEAS“, „NEUE PUNKTE“
+    und „FEATURE REQUEST“ in die Sachabschnitte einsortiert, Erledigtes hier
+    im Changelog statt in Fließtext oben.
+
+2026-08-28, zweiter Durchgang
+  * Lieferschein -> Angebot („zu Angebot“ in der Lieferscheinliste).
+  * Leere Hinweisbanner stehen nicht mehr als farbige Balken über den
+    Formularen (`[hidden] { display: none !important; }` in styles.css); ein
+    Test rechnet dafür mit der echten styles.css statt nur das Attribut zu
+    prüfen.
+  * Der Kundenimport nimmt CSV und JSON (inkl. der Datei aus dem
+    Kunden-Export), die sichtbare Dateiauswahl ist weg.
+
+2026-08-28, erster Durchgang
+  * Logo-Upload löscht keine ungespeicherten Firmendaten mehr.
+  * Kundenliste läuft nicht mehr über den Kartenrand hinaus.
+  * Kundenimport aus CSV.
+  * „History“ heißt „Rechnungsübersicht“.
+  * Sperr-, Anwesenheits- und Entwurfsbanner sind schließbar.
+  * Die Kundensuche wählt den besten Treffer vor.
+  * Teststand: 155 Backend- und 41 Frontend-Tests.
+
+2026-08-27
+  * Status gegen den tatsächlichen Code in backend/app/ geprüft; seitdem
+    gilt die [X]-Regel aus den Konventionen oben.
+  * Neu: Sicherheits-Middleware (CSRF, Rate Limit, Header), strukturiertes
+    Logging, API-Pagination, Nicht-root-Dienstbenutzer, die Testsuiten
+    (damals 139 Backend- und 27 Frontend-Tests) und die GitHub-Actions-
+    Pipeline.
+  * Die vier Feature-Requests umgesetzt: gemeinsame Kundenauswahl auf allen
+    drei Formularen, Entwurfsspeicher, Suche/Filter überall, eigener
+    Nicht-root-Benutzer.
+  * Die beiden geparkten Ideen umgesetzt: Anwesenheitsanzeige und
+    Zahlungsbestätigung aus beiden Zahlwegen.

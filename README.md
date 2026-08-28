@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (155 Backend- + 41 Frontend-Tests) with CI are
+and an automated test suite (161 Backend- + 51 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -30,6 +30,9 @@ code and `TODO.md` first.
   Summen werden live berechnet, Rechnungsnummern (`RE-<Jahr>-0001`) automatisch vergeben
   (kollisionsfrei über einen PostgreSQL-Advisory-Lock, auch bei gleichzeitigen Benutzern).
   Das **Rechnungsdatum ist immer der heutige Tag**.
+- **Nach dem Speichern in die Rechnungsübersicht** — ob neu angelegt oder
+  fertig bearbeitet: nach dem Speichern wechselt die App in die
+  Rechnungsübersicht und bestätigt dort die Nummer.
 - **Rechnungen bearbeiten** — bestehende, nicht stornierte Rechnungen können nachträglich
   geändert werden. Eine **Bearbeitungssperre** verhindert, dass zwei Benutzer gleichzeitig
   dieselbe Rechnung bearbeiten (läuft nach 5 Minuten Inaktivität automatisch ab).
@@ -58,10 +61,15 @@ code and `TODO.md` first.
   PDF herunterladen oder per E-Mail verschicken.
 - **Angebot → Rechnung** — ein Angebot lässt sich mit einem Klick in eine Rechnung
   umwandeln; die laufende Belegnummer wird dabei weitergereicht (z. B. `AN-2026-0007`
-  → `RE-2026-0007`).
+  → `RE-2026-0007`). Danach landet man direkt in der Rechnungsübersicht, in der die
+  neue Rechnung schon steht.
 - **Lieferscheine** — reiner Liefernachweis (Beschreibung + Menge, ohne Preise),
   frei anlegbar oder direkt aus einer Rechnung erzeugt (`RE-2026-0007` →
-  `LS-2026-0007`); als PDF herunterladen oder per E-Mail verschicken. Aus einem
+  `LS-2026-0007`); als PDF herunterladen oder per E-Mail verschicken.
+  Status: *offen*, *abgeschlossen* (grün) oder *storniert*. **Der PDF-Download
+  schließt einen offenen Lieferschein ab** — wer ihn ausdruckt, gibt ihn aus der
+  Hand. „wieder öffnen" setzt ihn bei Bedarf zurück auf *offen*; ein stornierter
+  bleibt storniert. Aus einem
   Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot"): Menge
   und Beschreibung kommen aus der Lieferung, die Preise – soweit die Position im
   Artikelstamm steht – aus den Standardpreisen, sonst 0 zum Nachtragen.
@@ -85,8 +93,10 @@ code and `TODO.md` first.
   die der Kunden-Export (📤, DSGVO Art. 15) ausgibt, sodass Export und Import
   zueinander passen. Gleiche Namen werden aktualisiert statt doppelt angelegt,
   fehlerhafte Datensätze einzeln gemeldet. Der Knopf öffnet direkt die
-  Dateiauswahl, der Import startet mit der Auswahl. Eine CSV-Vorlage gibt es
-  per Knopfdruck („Beispieldatei“).
+  Dateiauswahl, der Import startet mit der Auswahl. Eine Vorlage gibt es über
+  „📄 Beispieldatei herunterladen“: der Knopf fragt in einem kleinen Fenster
+  nach dem Format und liefert dann `kunden-vorlage.csv` oder
+  `kunden-vorlage.json`.
 - **Kundensuche mit Vorauswahl** — wer im Beleg-Formular nach einem Kunden
   sucht, bekommt den besten Treffer sofort ausgewählt und die Stammdaten
   übernommen; eine bereits getroffene Auswahl bleibt dabei stehen.
@@ -316,9 +326,9 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `POST`  | `/api/delivery-notes` | Lieferschein anlegen |
 | `GET`   | `/api/delivery-notes/{id}` | Einzelner Lieferschein |
 | `PUT`   | `/api/delivery-notes/{id}` | Bearbeiten |
-| `PATCH` | `/api/delivery-notes/{id}/status` | Status setzen |
+| `PATCH` | `/api/delivery-notes/{id}/status` | Status setzen (offen/abgeschlossen/storniert) |
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
-| `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen |
+| `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen (setzt *offen* → *abgeschlossen*) |
 | `POST`  | `/api/delivery-notes/{id}/email` | Per E-Mail senden |
 | `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln |
 

@@ -285,6 +285,7 @@
         <select id="delivery-filter-status">
           <option value="">Alle Status</option>
           <option value="offen">offen</option>
+          <option value="abgeschlossen">abgeschlossen</option>
           <option value="storniert">storniert</option>
         </select>
       </div>
@@ -303,6 +304,7 @@
     <!-- ============ RECHNUNGSÜBERSICHT (ehem. "History") ============ -->
     <section id="view-history" hidden>
       <h2>Rechnungsübersicht</h2>
+      <p id="history-msg" class="ok" hidden></p>
       <div class="bar">
         <input type="search" id="search" placeholder="Suche nach Nummer oder Kunde…">
         <select id="filter-status">
@@ -382,7 +384,15 @@
       <div class="bar">
         <input type="file" id="customer-import-file" accept=".csv,.json,text/csv,application/json" hidden>
         <button type="button" id="customer-import-btn" class="secondary">⬆️ Datei wählen &amp; importieren</button>
-        <button type="button" id="customer-import-example" class="secondary">📄 Beispieldatei (CSV)</button>
+        <span class="popover-anchor">
+          <button type="button" id="customer-import-example" class="secondary"
+                  aria-haspopup="true" aria-expanded="false">📄 Beispieldatei herunterladen</button>
+          <div id="customer-import-example-menu" class="popover" hidden>
+            <p class="popover-title">In welchem Format?</p>
+            <button type="button" class="secondary" data-example="csv">📄 CSV</button>
+            <button type="button" class="secondary" data-example="json">🧾 JSON</button>
+          </div>
+        </span>
       </div>
       <p id="customer-import-msg" class="hint"></p>
 
