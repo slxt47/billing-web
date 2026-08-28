@@ -117,7 +117,10 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
     if (/^\/api\/presence\/[a-z_]+\/\d+$/.test(path)) {
       return response({ others });
     }
-    return response(path in table ? table[path] : { ok: true });
+    const route = path in table ? table[path] : { ok: true };
+    // Eine Route darf eine Funktion sein, wenn GET und POST sich
+    // unterscheiden müssen (z. B. Liste holen vs. Rechnung anlegen).
+    return response(typeof route === "function" ? route(options) : route);
   };
 
   addFormNamedAccess(window);
@@ -760,6 +763,235 @@ test("Die Dateiauswahl selbst ist nicht sichtbar", async () => {
   assert.equal(window.document.querySelector("#customer-import-file").hidden, true);
 });
 
+// -------------------------------- Beispieldatei: CSV oder JSON
+/**
+ * Fängt die Downloads eines Fensters ab. jsdom kennt weder
+ * URL.createObjectURL noch echte Downloads; der überschriebene Klick auf den
+ * Anker verhindert außerdem den Navigationsversuch.
+ */
+function captureDownloads(window) {
+  const downloads = [];
+  let lastContent = "";
+  const NativeBlob = window.Blob;
+  // jsdoms Blob kennt kein text(), also den Inhalt beim Anlegen mitschneiden.
+  window.Blob = function (parts, options) {
+    lastContent = (parts || []).join("");
+    return new NativeBlob(parts, options);
+  };
+  window.URL.createObjectURL = () => "blob:test";
+  window.URL.revokeObjectURL = () => {};
+  window.HTMLAnchorElement.prototype.click = function () {
+    if (this.download) downloads.push({ name: this.download, content: lastContent });
+  };
+  return downloads;
+}
+
+test("Die Beispieldatei fragt erst nach dem Format", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+
+  const menu = window.document.querySelector("#customer-import-example-menu");
+  const button = window.document.querySelector("#customer-import-example");
+  assert.equal(menu.hidden, true, "das Fenster ist zu, solange niemand fragt");
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+
+  button.click();
+  assert.equal(menu.hidden, false, "der Knopf öffnet das Auswahlfenster");
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+  assert.deepEqual([...menu.querySelectorAll("button[data-example]")]
+                     .map((b) => b.dataset.example), ["csv", "json"]);
+});
+
+test("Beispieldatei als CSV", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#customer-import-example").click();
+  window.document.querySelector("[data-example=csv]").click();
+
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].name, "kunden-vorlage.csv");
+  const text = downloads[0].content;
+  assert.match(text.split("\r\n")[0], /^\ufeff?Name;E-Mail;/);
+  assert.match(text, /Muster GmbH;info@muster\.example/);
+  assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, true,
+               "nach der Auswahl schließt sich das Fenster");
+});
+
+test("Beispieldatei als JSON – im Format, das der Import versteht", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#customer-import-example").click();
+  window.document.querySelector("[data-example=json]").click();
+
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].name, "kunden-vorlage.json");
+  const data = JSON.parse(downloads[0].content);
+  assert.ok(Array.isArray(data.customers), "{\"customers\": [...]}");
+  assert.equal(data.customers[0].name, "Muster GmbH");
+  assert.equal(data.customers[0].payment_term_days, 30);
+  assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, true);
+});
+
+test("Ein Klick daneben schließt das Auswahlfenster", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+
+  window.document.querySelector("#customer-import-example").click();
+  assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, false);
+  window.document.body.click();
+  assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, true);
+});
+
+// -------------------------------- Lieferschein: PDF schließt ab
+const DN_OPEN_ROW = {
+  id: 5, number: "LS-2026-0005", customer_name: "Alpha AG",
+  issue_date: "2026-02-01", status: "offen", items: [],
+};
+
+test("Der PDF-Download lädt die Lieferscheinliste neu", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/delivery-notes": [DN_OPEN_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+  // Der Anker ist ein echter Download – jsdom soll nicht zu navigieren versuchen.
+  window.document.addEventListener("click", (e) => e.preventDefault(), true);
+
+  const before = requests.filter((r) => r.url.split("?")[0] === "/api/delivery-notes").length;
+  const link = window.document.querySelector("#delivery-body a[data-act=pdf]");
+  assert.ok(link, "PDF-Link in der Lieferscheinliste");
+  assert.equal(link.getAttribute("href"), "/api/delivery-notes/5/pdf");
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  await settle(900);
+
+  const after = requests.filter((r) => r.url.split("?")[0] === "/api/delivery-notes").length;
+  assert.ok(after > before, "die Liste wird nach dem Download neu geholt");
+});
+
+test("Ein abgeschlossener Lieferschein steht grün in der Liste", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/delivery-notes": [{ ...DN_OPEN_ROW, status: "abgeschlossen" }],
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  const badge = window.document.querySelector("#delivery-body .badge");
+  assert.equal(badge.textContent, "abgeschlossen");
+  // "bezahlt" ist die grüne Plakette – dieselbe wie bei einer bezahlten Rechnung.
+  assert.ok(badge.classList.contains("bezahlt"), "grüne Plakette");
+
+  const acts = [...window.document.querySelectorAll("#delivery-body button[data-act]")]
+    .map((b) => b.dataset.act);
+  assert.ok(acts.includes("reopen"), "lässt sich wieder öffnen");
+  assert.ok(acts.includes("cancel"), "lässt sich weiterhin stornieren");
+  assert.ok(acts.includes("edit"));
+  assert.ok(window.document.querySelector("#delivery-filter-status option[value=abgeschlossen]"),
+            "der Statusfilter kennt „abgeschlossen“");
+});
+
+test("Wieder öffnen setzt den Lieferschein zurück auf offen", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/delivery-notes": [{ ...DN_OPEN_ROW, status: "abgeschlossen" }] },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  window.document.querySelector("#delivery-body button[data-act=reopen]").click();
+  await settle(50);
+
+  const call = requests.find((r) => r.url === "/api/delivery-notes/5/status");
+  assert.ok(call, "PATCH /api/delivery-notes/5/status");
+  assert.equal(JSON.parse(call.options.body).status, "offen");
+});
+
+// -------------------------------- Rechnung speichern -> Rechnungsübersicht
+test("Nach dem Speichern einer Rechnung landet man in der Rechnungsübersicht", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/invoices": (o) => (o.method === "POST" ? { id: 7, number: "RE-2026-0007" } : []),
+    },
+  });
+  await settle();
+
+  const form = window.document.querySelector("#invoice-form");
+  form.customer_name.value = "Alpha AG";
+  const desc = window.document.querySelector("#items-body .i-desc");
+  desc.value = "Beratung";
+  fire(desc);
+  form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await settle(100);
+
+  assert.equal(window.document.querySelector("#view-history").hidden, false,
+               "die Rechnungsübersicht ist offen");
+  assert.equal(window.document.querySelector("#view-new").hidden, true);
+  const notice = window.document.querySelector("#history-msg");
+  assert.equal(notice.hidden, false);
+  assert.match(notice.textContent, /RE-2026-0007/);
+});
+
+test("Ein Wechsel in eine andere Ansicht räumt die Meldung weg", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/invoices": (o) => (o.method === "POST" ? { id: 7, number: "RE-2026-0007" } : []),
+    },
+  });
+  await settle();
+
+  const form = window.document.querySelector("#invoice-form");
+  form.customer_name.value = "Alpha AG";
+  const desc = window.document.querySelector("#items-body .i-desc");
+  desc.value = "Beratung";
+  fire(desc);
+  form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await settle(100);
+
+  window.document.querySelector("#nav-history").click();
+  await settle(50);
+  assert.equal(window.document.querySelector("#history-msg").hidden, true);
+});
+
+// -------------------------------- Angebot -> Rechnung
+test("Nach dem Umwandeln eines Angebots steht man in der Rechnungsübersicht", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/quotes/1/convert": { id: 11, number: "RE-2026-0011" } },
+  });
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+
+  const row = window.document.querySelector("#quotes-body tr");
+  const button = row.querySelector("button[data-act=convert]");
+  assert.ok(button, "Knopf „zu Rechnung“ in der Angebotsliste");
+  button.click();
+  await settle(50);
+
+  const call = requests.find((r) => r.url === "/api/quotes/1/convert");
+  assert.ok(call, "POST /api/quotes/1/convert");
+  assert.equal(call.options.method, "POST");
+  assert.equal(window.document.querySelector("#view-history").hidden, false,
+               "danach steht man in der Rechnungsübersicht");
+  assert.equal(window.document.querySelector("#view-quotes").hidden, true);
+  assert.ok(requests.some((r) => r.url.split("?")[0] === "/api/invoices"),
+            "die Rechnungsübersicht wird dabei frisch geladen");
+});
+
 // -------------------------------- Lieferschein -> Angebot
 test("Ein Lieferschein lässt sich in ein Angebot umwandeln", async () => {
   const { window, requests } = startApp({
@@ -819,7 +1051,8 @@ test("Leere Hinweisbanner werden nicht angezeigt", () => {
   for (const sel of ["#lock-banner", "#invoice-presence", "#quote-presence",
                      "#delivery-presence", "#invoice-draft-banner",
                      "#quote-draft-banner", "#delivery-draft-banner",
-                     "#customer-import-file"]) {
+                     "#customer-import-file", "#customer-import-example-menu",
+                     "#history-msg"]) {
     const el = dom.window.document.querySelector(sel);
     assert.equal(el.hidden, true, `${sel}: hidden-Attribut`);
     assert.equal(dom.window.getComputedStyle(el).display, "none",

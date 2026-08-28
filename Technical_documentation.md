@@ -33,7 +33,7 @@ TECHNOLOGY STACK:
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 139 backend + 27 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 161 backend + 51 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -118,6 +118,14 @@ can carry the same running number forward with just the prefix changed
 (e.g. AN-2026-0007 -> RE-2026-0007 -> LS-2026-0007). Number assignment is
 serialized with a PostgreSQL advisory transaction lock
 (`pg_advisory_xact_lock`, fixed key) so concurrent users never collide.
+
+A delivery note has three states: `offen`, `abgeschlossen` and `storniert`
+(`models.DN_OPEN/DN_DONE/DN_CANCELLED`). `GET /api/delivery-notes/{id}/pdf`
+moves an open note to `abgeschlossen` — printing it is what hands it over —
+while a cancelled one keeps its state. That is a side effect on a GET, chosen
+deliberately so the plain download link in the list stays a link; the frontend
+reloads the list right after the click. `PATCH .../status` can set any of the
+three, so a note can be reopened.
 
 The one conversion that can close the circle is delivery note -> quote
 (`crud.convert_delivery_note_to_quote`, the counterpart to quote -> invoice ->
@@ -319,7 +327,7 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 155 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 161 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
 invoice/quote/delivery-note lifecycles, customers and products, admin-only
 endpoints and the audit log, and the security layer itself (CSRF rejection,
@@ -331,10 +339,13 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 41 frontend tests that load the real
+`backend/tests/frontend/` holds 51 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
-the customer picker, the draft cache, the list filters, the CSRF header and
-the HTML escaping (`npm install && npm test`, needs Node >= 20).
+the customer picker, the draft cache, the list filters, the sample-file
+downloads (CSV/JSON), the post-save navigation into the invoice overview, the
+delivery-note list, the CSRF header and the HTML escaping (`npm install &&
+npm test`, needs Node >= 20). A stubbed route may be a function of the request
+options when GET and POST on the same path must differ.
 
 `.github/workflows/ci.yml` runs four jobs on every push and PR: the backend
 suite, the frontend suite, static checks (`compileall`, `bash -n` and

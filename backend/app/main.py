@@ -23,7 +23,7 @@ app = FastAPI(title="Rechnungs-App")
 STATIC_DIR = Path(__file__).parent / "static"
 VALID_STATUS = {models.STATUS_OPEN, models.STATUS_PAID, models.STATUS_CANCELLED}
 VALID_QUOTE_STATUS = {models.QUOTE_OPEN, models.QUOTE_ACCEPTED, models.QUOTE_DECLINED}
-VALID_DN_STATUS = {models.DN_OPEN, models.DN_CANCELLED}
+VALID_DN_STATUS = {models.DN_OPEN, models.DN_DONE, models.DN_CANCELLED}
 
 
 @app.on_event("startup")
@@ -807,6 +807,11 @@ def download_delivery_note_pdf(dn_id: int, db: Session = Depends(get_db)):
     if not dn:
         raise HTTPException(404, "Lieferschein nicht gefunden")
     data = pdf.delivery_note_pdf(dn, crud.get_settings(db))
+    # Der Ausdruck ist der Abschluss: ein offener Lieferschein gilt danach als
+    # abgeschlossen. Ein stornierter bleibt storniert, ein bereits
+    # abgeschlossener ändert sich nicht.
+    if dn.status == models.DN_OPEN:
+        crud.set_delivery_note_status(db, dn, models.DN_DONE)
     return Response(
         content=data, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{dn.number}.pdf"'},

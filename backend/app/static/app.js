@@ -114,7 +114,7 @@ function show(view) {
   if (view === "dashboard") loadDashboard();
   if (view === "quotes") loadQuotes();
   if (view === "delivery") loadDeliveryNotes();
-  if (view === "history") loadHistory();
+  if (view === "history") { historyNotice(""); loadHistory(); }
   if (view === "customers") loadCustomers();
   if (view === "products") loadProducts();
   if (view === "settings") loadSettings();
@@ -622,6 +622,10 @@ $("#invoice-form").addEventListener("submit", async (e) => {
     msg.textContent = `✓ Gespeichert als ${inv.number}`;
     msg.className = "ok";
     resetInvoiceForm();
+    // Nach dem Speichern (neu wie bearbeitet) geht es in die
+    // Rechnungsübersicht, in der die Rechnung schon steht.
+    show("history");
+    historyNotice(`✓ Rechnung ${inv.number} gespeichert.`);
   } else {
     const err = await res.json().catch(() => ({}));
     msg.textContent = "Fehler beim Speichern: " + (err.detail || res.status);
@@ -630,6 +634,14 @@ $("#invoice-form").addEventListener("submit", async (e) => {
 });
 
 // ---------------------- History ----------------------
+/** Kurze Bestätigung über der Rechnungsübersicht (z. B. nach dem Speichern). */
+function historyNotice(text) {
+  const el = $("#history-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
 async function loadHistory() {
   const q = $("#search").value.trim();
   const url = "/api/invoices" + (q ? `?search=${encodeURIComponent(q)}` : "");
@@ -929,13 +941,27 @@ $("#customer-form").addEventListener("submit", async (e) => {
 // Ergänzung zur Eingabemaske: eine bestehende Kundenliste (Excel/CSV) lässt
 // sich in einem Rutsch übernehmen. Ausgewertet wird die Datei serverseitig
 // (POST /api/customers/import), hier hängt nur die Bedienung dran.
-// Als Vorlage reicht CSV; JSON versteht der Import ebenfalls (u. a. den
-// Kundenexport dieser App).
+// Vorlage gibt es in beiden Formaten, die der Import versteht – CSV und JSON
+// (JSON schluckt auch den Kundenexport dieser App). Beide werden aus denselben
+// Beispieldaten erzeugt, damit sie nicht auseinanderlaufen.
+const EXAMPLE_CUSTOMERS = [
+  { name: "Muster GmbH", email: "info@muster.example", contact_person: "Frau Muster",
+    address: "Musterweg 1, 12345 Musterstadt",
+    payment_term_days: 30, skonto_percent: 2, skonto_days: 7 },
+  { name: "Beispiel AG", email: "kontakt@beispiel.example", contact_person: "Herr Beispiel",
+    address: "Beispielstr. 2, 54321 Beispielstadt",
+    payment_term_days: 14, skonto_percent: 0, skonto_days: 0 },
+];
+const EXAMPLE_CSV_HEADER = ["Name", "E-Mail", "Ansprechpartner", "Anschrift",
+                            "Zahlungsfrist", "Skonto", "Skonto_Tage"];
+const EXAMPLE_CSV_FIELDS = ["name", "email", "contact_person", "address",
+                            "payment_term_days", "skonto_percent", "skonto_days"];
+
 const CSV_EXAMPLE = [
-  "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage",
-  "Muster GmbH;info@muster.example;Frau Muster;Musterweg 1, 12345 Musterstadt;30;2;7",
-  "Beispiel AG;kontakt@beispiel.example;Herr Beispiel;Beispielstr. 2, 54321 Beispielstadt;14;0;0",
+  EXAMPLE_CSV_HEADER.join(";"),
+  ...EXAMPLE_CUSTOMERS.map((c) => EXAMPLE_CSV_FIELDS.map((f) => c[f]).join(";")),
 ].join("\r\n");
+const JSON_EXAMPLE = JSON.stringify({ customers: EXAMPLE_CUSTOMERS }, null, 2);
 
 function importMessage(text, cls) {
   const msg = $("#customer-import-msg");
@@ -944,14 +970,51 @@ function importMessage(text, cls) {
   msg.className = cls ? cls : "hint";
 }
 
-$("#customer-import-example").onclick = () => {
-  const blob = new Blob(["\ufeff" + CSV_EXAMPLE], { type: "text/csv;charset=utf-8" });
+function downloadFile(name, content, type) {
+  const blob = new Blob([content], { type });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "kunden-vorlage.csv";
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// Der Knopf lädt nicht sofort herunter, sondern fragt in einem kleinen Fenster
+// nach dem Format – die Vorlage gibt es als CSV und als JSON.
+const exampleMenu = $("#customer-import-example-menu");
+const exampleButton = $("#customer-import-example");
+
+function toggleExampleMenu(open) {
+  exampleMenu.hidden = !open;
+  exampleButton.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+exampleButton.onclick = (e) => {
+  e.stopPropagation();
+  toggleExampleMenu(exampleMenu.hidden);
 };
+
+exampleMenu.querySelectorAll("button[data-example]").forEach((btn) => {
+  btn.onclick = () => {
+    if (btn.dataset.example === "json") {
+      downloadFile("kunden-vorlage.json", JSON_EXAMPLE,
+                   "application/json;charset=utf-8");
+    } else {
+      // BOM voran, sonst zeigt Excel die Umlaute falsch an.
+      downloadFile("kunden-vorlage.csv", "\ufeff" + CSV_EXAMPLE,
+                   "text/csv;charset=utf-8");
+    }
+    toggleExampleMenu(false);
+  };
+});
+
+// Klick daneben oder Escape schließt das Fenster wieder.
+document.addEventListener("click", (e) => {
+  if (!exampleMenu.hidden && !exampleMenu.contains(e.target)) toggleExampleMenu(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !exampleMenu.hidden) toggleExampleMenu(false);
+});
 
 // Kein zweistufiges "Datei auswählen" + "Importieren": der Knopf öffnet
 // direkt den Dateidialog, die Auswahl startet den Import.
@@ -1289,8 +1352,15 @@ async function quoteAction(act, q) {
   if (act === "convert") {
     if (!confirm(`Angebot ${q.number} jetzt in eine Rechnung umwandeln?`)) return;
     const res = await fetch(`/api/quotes/${q.id}/convert`, { method: "POST" });
-    if (res.ok) { alert("✓ In Rechnung umgewandelt."); loadQuotes(); }
-    else { const e = await res.json().catch(() => ({})); alert("Fehler: " + (e.detail || res.status)); }
+    if (res.ok) {
+      const inv = await res.json().catch(() => null);
+      alert(inv && inv.number ? `✓ Rechnung ${inv.number} erstellt.` : "✓ In Rechnung umgewandelt.");
+      // Direkt in die Rechnungsübersicht, wo die neue Rechnung schon steht.
+      show("history");
+    } else {
+      const e = await res.json().catch(() => ({}));
+      alert("Fehler: " + (e.detail || res.status));
+    }
     return;
   }
   const map = { accept: "angenommen", decline: "abgelehnt" };
@@ -1398,6 +1468,9 @@ $("#delivery-form").addEventListener("submit", async (e) => {
   }
 });
 
+// "abgeschlossen" bekommt dieselbe grüne Plakette wie eine bezahlte Rechnung.
+const DN_BADGE_CLASS = { offen: "offen", abgeschlossen: "bezahlt", storniert: "storniert" };
+
 async function loadDeliveryNotes() {
   const [rows] = await Promise.all([
     fetch("/api/delivery-notes").then((r) => r.json()),
@@ -1424,19 +1497,28 @@ function renderDeliveryNotes() {
       <td>${esc(d.number)}${presenceMarker("delivery_note", d.id)}</td>
       <td>${esc(d.customer_name)}</td>
       <td>${fmtDate(d.issue_date)}</td>
-      <td><span class="badge ${d.status === "storniert" ? "storniert" : "offen"}">${esc(d.status)}</span></td>
+      <td><span class="badge ${DN_BADGE_CLASS[d.status] || "offen"}">${esc(d.status)}</span></td>
       <td class="actions">
-        <a class="link" href="/api/delivery-notes/${d.id}/pdf" title="PDF herunterladen">⬇️ <span>PDF</span></a>
+        <a class="link" href="/api/delivery-notes/${d.id}/pdf" data-act="pdf"
+           title="PDF herunterladen – der Lieferschein gilt danach als abgeschlossen">⬇️ <span>PDF</span></a>
         <button class="link" data-act="email" title="Per E-Mail senden">✉️ <span>Mail</span></button>
         ${d.status !== "storniert" ? `<button class="link" data-act="edit" title="Bearbeiten">✏️ <span>bearbeiten</span></button>` : ""}
         ${d.status !== "storniert" ? `<button class="link" data-act="to-quote" title="In Angebot umwandeln">📄 <span>zu Angebot</span></button>` : ""}
-        ${d.status !== "storniert"
+        ${d.status === "offen"
           ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
-          : `<button class="link" data-act="reopen" title="Storno rückgängig">↩️ <span>zurück</span></button>`}
+          : `<button class="link" data-act="reopen" title="Wieder auf offen setzen">↩️ <span>wieder öffnen</span></button>`}
+        ${d.status === "abgeschlossen"
+          ? `<button class="warn" data-act="cancel" title="Stornieren">🚫 <span>stornieren</span></button>`
+          : ""}
         <button class="danger" data-act="delete" title="Lieferschein löschen">🗑️ <span>löschen</span></button>
       </td>`;
     tr.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.onclick = () => deliveryAction(btn.dataset.act, d);
+    });
+    // Der PDF-Link lädt ganz normal herunter; der Server setzt dabei den
+    // Status auf "abgeschlossen", also holen wir die Liste kurz danach neu.
+    tr.querySelector("a[data-act=pdf]").addEventListener("click", () => {
+      setTimeout(loadDeliveryNotes, 800);
     });
     body.appendChild(tr);
   }

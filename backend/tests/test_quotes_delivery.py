@@ -129,6 +129,45 @@ def test_delivery_note_pdf_and_delete(user_client):
     assert user_client.get(f"/api/delivery-notes/{note['id']}").status_code == 404
 
 
+def test_delivery_note_pdf_closes_it(user_client):
+    """Der Ausdruck ist der Abschluss: offen -> abgeschlossen."""
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    assert note["status"] == "offen"
+    user_client.get(f"/api/delivery-notes/{note['id']}/pdf")
+    assert user_client.get(f"/api/delivery-notes/{note['id']}").json()["status"] == "abgeschlossen"
+    # Ein zweiter Ausdruck ändert nichts mehr.
+    user_client.get(f"/api/delivery-notes/{note['id']}/pdf")
+    assert user_client.get(f"/api/delivery-notes/{note['id']}").json()["status"] == "abgeschlossen"
+
+
+def test_delivery_note_pdf_keeps_cancelled(user_client):
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    user_client.patch(f"/api/delivery-notes/{note['id']}/status", json={"status": "storniert"})
+    assert user_client.get(f"/api/delivery-notes/{note['id']}/pdf").content.startswith(b"%PDF")
+    assert user_client.get(f"/api/delivery-notes/{note['id']}").json()["status"] == "storniert"
+
+
+def test_delivery_note_reopen_after_pdf(user_client):
+    """Abgeschlossen ist kein Endzustand: wieder öffnen bleibt möglich."""
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    user_client.get(f"/api/delivery-notes/{note['id']}/pdf")
+    reopened = user_client.patch(f"/api/delivery-notes/{note['id']}/status",
+                                 json={"status": "offen"}).json()
+    assert reopened["status"] == "offen"
+    done = user_client.patch(f"/api/delivery-notes/{note['id']}/status",
+                             json={"status": "abgeschlossen"}).json()
+    assert done["status"] == "abgeschlossen"
+
+
+def test_closed_delivery_note_still_converts(user_client):
+    """Nur ein stornierter Lieferschein ist von der Umwandlung ausgenommen."""
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    user_client.get(f"/api/delivery-notes/{note['id']}/pdf")
+    res = user_client.post(f"/api/delivery-notes/{note['id']}/convert-to-quote")
+    assert res.status_code == 201
+    assert res.json()["number"].startswith("AN-")
+
+
 def test_delivery_note_search(user_client):
     user_client.post("/api/delivery-notes", json={**NOTE, "customer_name": "Nord"})
     user_client.post("/api/delivery-notes", json={**NOTE, "customer_name": "Süd"})
