@@ -115,3 +115,111 @@ def test_csv_exports(user_client):
     revenue = user_client.get("/api/reports/revenue.csv", params=PERIOD)
     assert "Erloese" in revenue.headers["content-disposition"]
     assert "Muster GmbH" in revenue.content.decode("utf-8")
+
+
+# --------------------------- Freier Report-Builder -------------------------
+def test_custom_report_lists_documents_without_grouping(user_client):
+    make_invoice(user_client, customer_name="Alpha AG")
+    make_invoice(user_client, customer_name="Beta GmbH",
+                 items=[{"description": "B", "quantity": 1, "unit_price": 50}])
+
+    report = user_client.get("/api/reports/custom",
+                             params={**PERIOD, "doc_type": "invoice"}).json()
+    assert report["group_by"] == "none"
+    assert report["has_amounts"] is True
+    assert len(report["rows"]) == 2
+    assert {r["customer_name"] for r in report["rows"]} == {"Alpha AG", "Beta GmbH"}
+    assert report["totals"]["count"] == 2
+    assert report["totals"]["net"] == 250.0
+
+
+def test_custom_report_groups_by_customer(user_client):
+    make_invoice(user_client, customer_name="Alpha AG")
+    make_invoice(user_client, customer_name="Alpha AG",
+                 items=[{"description": "B", "quantity": 1, "unit_price": 50}])
+    make_invoice(user_client, customer_name="Beta GmbH")
+
+    report = user_client.get("/api/reports/custom", params={
+        **PERIOD, "doc_type": "invoice", "group_by": "customer"}).json()
+    by_customer = {r["group"]: r for r in report["rows"]}
+    assert by_customer["Alpha AG"]["count"] == 2
+    assert by_customer["Alpha AG"]["net"] == 250.0
+    assert by_customer["Beta GmbH"]["count"] == 1
+
+
+def test_custom_report_groups_by_month_and_by_status(user_client):
+    make_invoice(user_client)
+    inv = make_invoice(user_client)
+    user_client.patch(f"/api/invoices/{inv['id']}/status", json={"status": "bezahlt"})
+
+    by_month = user_client.get("/api/reports/custom", params={
+        **PERIOD, "doc_type": "invoice", "group_by": "month"}).json()
+    assert len(by_month["rows"]) == 1              # beide im selben Monat
+    assert by_month["rows"][0]["count"] == 2
+
+    by_status = user_client.get("/api/reports/custom", params={
+        **PERIOD, "doc_type": "invoice", "group_by": "status"}).json()
+    counts = {r["group"]: r["count"] for r in by_status["rows"]}
+    assert counts["offen"] == 1
+    assert counts["bezahlt"] == 1
+
+
+def test_custom_report_status_filter(user_client):
+    inv = make_invoice(user_client)
+    make_invoice(user_client)
+    user_client.patch(f"/api/invoices/{inv['id']}/status", json={"status": "bezahlt"})
+
+    report = user_client.get("/api/reports/custom", params={
+        **PERIOD, "doc_type": "invoice", "status": "bezahlt"}).json()
+    assert len(report["rows"]) == 1
+    assert report["rows"][0]["status"] == "bezahlt"
+
+
+def test_custom_report_covers_quotes_delivery_notes_and_credit_notes(user_client):
+    invoice = make_invoice(user_client)
+    user_client.post("/api/quotes", json={
+        "customer_name": "Angebot AG",
+        "items": [{"description": "Konzept", "quantity": 1, "unit_price": 300}]})
+    user_client.post("/api/delivery-notes", json={
+        "customer_name": "Liefer GmbH",
+        "items": [{"description": "Kiste Schrauben", "quantity": 3}]})
+    user_client.post(f"/api/invoices/{invoice['id']}/credit-note", json={"reason": "Kulanz"})
+
+    quotes = user_client.get("/api/reports/custom",
+                             params={**PERIOD, "doc_type": "quote"}).json()
+    assert quotes["has_amounts"] is True
+    assert quotes["totals"]["count"] == 1
+
+    notes = user_client.get("/api/reports/custom",
+                            params={**PERIOD, "doc_type": "delivery_note"}).json()
+    assert notes["has_amounts"] is False
+    assert "net" not in notes["rows"][0]
+    assert notes["totals"]["net"] is None
+    assert notes["totals"]["item_count"] == 1
+
+    credits = user_client.get("/api/reports/custom",
+                              params={**PERIOD, "doc_type": "credit_note"}).json()
+    assert credits["totals"]["count"] == 1
+    assert credits["totals"]["gross"] == 240.0
+
+
+def test_custom_report_rejects_unknown_doc_type_or_group_by(user_client):
+    bad_type = user_client.get("/api/reports/custom",
+                               params={**PERIOD, "doc_type": "expense"})
+    assert bad_type.status_code == 400
+
+    bad_group = user_client.get("/api/reports/custom", params={
+        **PERIOD, "doc_type": "invoice", "group_by": "planet"})
+    assert bad_group.status_code == 400
+
+
+def test_custom_report_csv_export(user_client):
+    make_invoice(user_client)
+    response = user_client.get("/api/reports/custom.csv",
+                               params={**PERIOD, "doc_type": "invoice"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    text = response.content.decode("utf-8-sig")
+    assert "Freier Report" in text
+    assert "Muster GmbH" in text
+    assert "200,00" in text

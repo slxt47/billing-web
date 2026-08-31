@@ -84,3 +84,11 @@ ALERT_BACKUP_MAX_AGE_HOURS = int(os.getenv("ALERT_BACKUP_MAX_AGE_HOURS", "36"))
 ALERT_COOLDOWN = int(os.getenv("ALERT_COOLDOWN", "3600"))
 # Antwortzeit, ab der ein Request als langsam gezählt wird (Sekunden).
 SLOW_REQUEST_SECONDS = float(os.getenv("SLOW_REQUEST_SECONDS", "2"))
+
+# --- Response-Cache ---------------------------------------------------------
+# Hält die Antwort weniger, aber rechenintensiver GET-Endpunkte (Dashboard,
+# Auswertungen) kurz im Prozessspeicher vor (siehe cache.py). 0 Sekunden TTL
+# wirkt wie abgeschaltet, ohne dass die Caching-Middleware selbst ausgebaut
+# werden müsste.
+CACHE_ENABLED = _flag("CACHE_ENABLED", "true")
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "30"))

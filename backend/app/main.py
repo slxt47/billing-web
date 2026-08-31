@@ -16,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
 from . import (crud, models, schemas, pdf, auth, email_service, config, backup,
-               security, logging_setup, reports, monitoring)
+               security, logging_setup, reports, monitoring, cache)
 from .database import get_db, init_db, SessionLocal
 
 app = FastAPI(title="Rechnungs-App")
@@ -65,9 +65,16 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> models.Use
     return user
 
 
+# --------------------------- Response-Cache ------------------------------
+# Innerste Middleware überhaupt: läuft erst, nachdem die Login-Prüfung durch
+# ist, direkt vor der Route (siehe cache.py). Ein Cache-Treffer soll nicht an
+# der Anmeldung vorbeigehen, deshalb die Registrierung noch vor require_login.
+app.middleware("http")(cache.response_cache_middleware)
+
+
 # --------------------------- Auth-Schutz --------------------------------
-# Innerste Middleware: läuft erst, wenn Session und CSRF-Prüfung durch sind,
-# sodass request.session hier bereits verfügbar ist.
+# Läuft erst, wenn Session und CSRF-Prüfung durch sind, sodass
+# request.session hier bereits verfügbar ist.
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
@@ -78,9 +85,9 @@ async def require_login(request: Request, call_next):
     return RedirectResponse("/login")
 
 
-# Von innen nach außen: Login-Prüfung -> CSRF -> Session -> Rate-Limit ->
-# Sicherheits-Header -> Request-ID/Logging. Starlette führt die zuletzt
-# registrierte Middleware zuerst aus, deshalb ist die Reihenfolge hier
+# Von innen nach außen: Response-Cache -> Login-Prüfung -> CSRF -> Session ->
+# Rate-Limit -> Sicherheits-Header -> Request-ID/Logging. Starlette führt die
+# zuletzt registrierte Middleware zuerst aus, deshalb ist die Reihenfolge hier
 # genau umgekehrt zur Durchlaufreihenfolge.
 app.middleware("http")(security.csrf_middleware)
 app.add_middleware(
@@ -475,6 +482,19 @@ CSV_COLUMNS = {
 FIELD_BY_ALIAS = {alias: field for field, aliases in CSV_COLUMNS.items()
                   for alias in aliases}
 NUMBER_FIELDS = ("payment_term_days", "skonto_percent", "skonto_days")
+
+# Artikelimport: Bezeichnung + Standardpreis, sonst nichts – dieselbe Idee wie
+# beim Kundenimport, nur mit deutlich weniger Spalten.
+PRODUCT_CSV_COLUMNS = {
+    "name": ("name", "bezeichnung", "artikel", "artikelname", "leistung",
+             "product", "product_name"),
+    "unit_price": ("preis", "einzelpreis", "standardpreis", "unit_price",
+                   "price", "netto"),
+}
+PRODUCT_FIELD_BY_ALIAS = {alias: field for field, aliases in PRODUCT_CSV_COLUMNS.items()
+                          for alias in aliases}
+PRODUCT_NUMBER_FIELDS = ("unit_price",)
+
 IMPORT_MAX_BYTES = 1_000_000
 IMPORT_MAX_ROWS = 5_000
 IMPORT_MAX_ERRORS = 20
@@ -490,21 +510,23 @@ def _import_text(raw: bytes) -> str:
     raise HTTPException(400, "Datei ist nicht lesbar (weder UTF-8 noch Windows-1252)")
 
 
-def _field_for(key: str) -> str | None:
-    """Spaltenüberschrift bzw. JSON-Schlüssel auf ein Feld von CustomerIn abbilden."""
-    return FIELD_BY_ALIAS.get(str(key or "").strip().lstrip("\ufeff").lower())
+def _field_for(key: str, alias_map: dict[str, str]) -> str | None:
+    """Spaltenüberschrift bzw. JSON-Schlüssel auf ein Feld des Ziel-Schemas
+    abbilden (Kunde oder Artikel, je nach übergebener Aliaskarte)."""
+    return alias_map.get(str(key or "").strip().lstrip("\ufeff").lower())
 
 
-def _map_customer_row(raw: dict) -> dict:
-    """Rohdatensatz (CSV-Zeile oder JSON-Objekt) auf CustomerIn-Felder
-    eindampfen. Unbekannte Schlüssel (id, active, invoices …) fallen weg."""
+def _map_row(raw: dict, alias_map: dict[str, str],
+            number_fields: tuple[str, ...]) -> dict:
+    """Rohdatensatz (CSV-Zeile oder JSON-Objekt) auf Schema-Felder eindampfen.
+    Unbekannte Schlüssel (id, active, invoices …) fallen weg."""
     values: dict[str, str] = {}
     for key, value in raw.items():
-        field = _field_for(key)
+        field = _field_for(key, alias_map)
         if not field or field in values or value is None:
             continue
         values[field] = str(value).strip()
-    for field in NUMBER_FIELDS:
+    for field in number_fields:
         if field in values:
             # "12,5" (deutsche Schreibweise) -> "12.5"; leer = Vorgabewert
             values[field] = values[field].replace(",", ".")
@@ -513,40 +535,41 @@ def _map_customer_row(raw: dict) -> dict:
     return values
 
 
-def _rows_from_csv(text_content: str) -> list[dict]:
+def _rows_from_csv(text_content: str, alias_map: dict[str, str],
+                   required_label: str) -> list[dict]:
     first_line = text_content.splitlines()[0] if text_content.strip() else ""
     delimiter = ";" if first_line.count(";") > first_line.count(",") else ","
     if "\t" in first_line and first_line.count("\t") > first_line.count(delimiter):
         delimiter = "\t"
     reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
-    if not any(_field_for(h) == "name" for h in reader.fieldnames or []):
-        raise HTTPException(400, "Es fehlt eine Spalte mit dem Kundennamen "
-                                 "(z. B. \"name\") in der Kopfzeile")
+    if not any(_field_for(h, alias_map) == "name" for h in reader.fieldnames or []):
+        raise HTTPException(400, f"Es fehlt eine Spalte mit {required_label} "
+                                 "in der Kopfzeile")
     return list(reader)
 
 
-def _rows_from_json(text_content: str) -> list[dict]:
-    """Kunden aus einer JSON-Datei ziehen. Akzeptiert den Export dieser App
-    ({"customer": {...}, "invoices": [...]}), eine Liste von Kunden, ein
-    einzelnes Kundenobjekt und {"customers": [...]}."""
+def _rows_from_json(text_content: str, alias_map: dict[str, str], required_label: str,
+                    list_key: str, single_key: str) -> list[dict]:
+    """Datensätze aus einer JSON-Datei ziehen. Akzeptiert den Export dieser App
+    (bei Kunden: {"customer": {...}, "invoices": [...]}), eine Liste von
+    Objekten, ein einzelnes Objekt und {list_key: [...]}."""
     try:
         data = json.loads(text_content)
     except json.JSONDecodeError as err:
         raise HTTPException(400, f"Die JSON-Datei ist fehlerhaft: {err.msg} "
                                  f"(Zeile {err.lineno})")
     if isinstance(data, dict):
-        if isinstance(data.get("customer"), dict):
-            data = [data["customer"]]
-        elif isinstance(data.get("customers"), list):
-            data = data["customers"]
+        if isinstance(data.get(single_key), dict):
+            data = [data[single_key]]
+        elif isinstance(data.get(list_key), list):
+            data = data[list_key]
         else:
             data = [data]
     if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
-        raise HTTPException(400, "Unerwarteter Aufbau: erwartet wird ein Kundenobjekt "
-                                 "oder eine Liste von Kundenobjekten")
-    if not any(_field_for(key) == "name" for row in data for key in row):
-        raise HTTPException(400, "Es fehlt ein Feld mit dem Kundennamen "
-                                 "(z. B. \"name\")")
+        raise HTTPException(400, f"Unerwarteter Aufbau: erwartet wird ein "
+                                 f"{single_key}-Objekt oder eine Liste davon")
+    if not any(_field_for(key, alias_map) == "name" for row in data for key in row):
+        raise HTTPException(400, f"Es fehlt ein Feld mit {required_label}")
     return data
 
 
@@ -554,6 +577,26 @@ def _looks_like_json(filename: str, text_content: str) -> bool:
     if (filename or "").lower().endswith(".json"):
         return True
     return text_content.lstrip()[:1] in ("{", "[")
+
+
+async def _read_import_rows(file: UploadFile, alias_map: dict[str, str],
+                            required_label: str, list_key: str,
+                            single_key: str) -> list[dict]:
+    """Gemeinsamer Einstieg für Kunden- und Artikelimport: Datei lesen,
+    dekodieren, je nach Inhalt als CSV oder JSON in Rohdatensätze zerlegen."""
+    raw = await file.read()
+    if not raw.strip():
+        raise HTTPException(400, "Die Datei ist leer")
+    if len(raw) > IMPORT_MAX_BYTES:
+        raise HTTPException(400, "Datei ist zu groß (max. 1 MB)")
+
+    text_content = _import_text(raw)
+    raw_rows = (_rows_from_json(text_content, alias_map, required_label, list_key, single_key)
+                if _looks_like_json(file.filename or "", text_content)
+                else _rows_from_csv(text_content, alias_map, required_label))
+    if len(raw_rows) > IMPORT_MAX_ROWS:
+        raise HTTPException(400, f"Zu viele Datensätze (max. {IMPORT_MAX_ROWS})")
+    return raw_rows
 
 
 @app.post("/api/customers/import", response_model=schemas.CustomerImportResult)
@@ -567,24 +610,14 @@ async def import_customers(request: Request, file: UploadFile = File(...),
     aktualisiert statt doppelt angelegt. Fehlerhafte Datensätze werden
     übersprungen und einzeln gemeldet – ein Tippfehler im 20. Datensatz soll
     die anderen 19 nicht verhindern."""
-    raw = await file.read()
-    if not raw.strip():
-        raise HTTPException(400, "Die Datei ist leer")
-    if len(raw) > IMPORT_MAX_BYTES:
-        raise HTTPException(400, "Datei ist zu groß (max. 1 MB)")
-
-    text_content = _import_text(raw)
-    raw_rows = (_rows_from_json(text_content)
-                if _looks_like_json(file.filename or "", text_content)
-                else _rows_from_csv(text_content))
-    if len(raw_rows) > IMPORT_MAX_ROWS:
-        raise HTTPException(400, f"Zu viele Datensätze (max. {IMPORT_MAX_ROWS})")
+    raw_rows = await _read_import_rows(
+        file, FIELD_BY_ALIAS, 'dem Kundennamen (z. B. "name")', "customers", "customer")
 
     rows: list[schemas.CustomerIn] = []
     errors: list[str] = []
     skipped = 0
     for number, raw_row in enumerate(raw_rows, start=1):
-        values = _map_customer_row(raw_row)
+        values = _map_row(raw_row, FIELD_BY_ALIAS, NUMBER_FIELDS)
         if not values.get("name"):
             skipped += 1
             continue
@@ -601,6 +634,36 @@ async def import_customers(request: Request, file: UploadFile = File(...),
                     f"{skipped} übersprungen")
     return schemas.CustomerImportResult(created=created, updated=updated,
                                         skipped=skipped, errors=errors)
+
+
+def _write_csv(header: list[str], rows: list[list]) -> str:
+    """CSV mit Semikolon-Trennung und korrektem Quoting (Python-csv-Modul statt
+    manuellem Zusammenkleben, damit ein Semikolon oder Anführungszeichen in
+    einem Kundennamen die Spalten nicht verschiebt). BOM voran, sonst zeigt
+    Excel die Umlaute falsch an."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    writer.writerow(header)
+    writer.writerows(rows)
+    return "\ufeff" + buf.getvalue()
+
+
+@app.get("/api/customers/export.csv")
+def export_customers_csv(db: Session = Depends(get_db)):
+    """Massenexport aller Kunden als CSV – Gegenstück zum Import, dieselben
+    Spalten, damit sich die Datei ohne Nacharbeit wieder einlesen lässt. Anders
+    als /api/customers/{id}/export (DSGVO Art. 15, nur Admin) ist das hier ein
+    formloser Arbeitsexport für alle angemeldeten Benutzer, wie die Liste
+    selbst auch."""
+    customers = db.query(models.Customer).order_by(models.Customer.name.asc()).all()
+    text_content = _write_csv(
+        ["Name", "E-Mail", "Ansprechpartner", "Anschrift", "Zahlungsfrist",
+         "Skonto", "Skonto_Tage", "Status"],
+        [[c.name, c.email, c.contact_person, c.address, c.payment_term_days,
+          c.skonto_percent, c.skonto_days, "aktiv" if c.active else "inaktiv"]
+         for c in customers],
+    )
+    return _csv_response(text_content, "kunden-export.csv")
 
 
 @app.get("/api/customers/{customer_id}/export", response_model=schemas.CustomerExportOut)
@@ -682,6 +745,51 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     return Response(status_code=204)
 
 
+@app.post("/api/products/import", response_model=schemas.ProductImportResult)
+async def import_products(request: Request, file: UploadFile = File(...),
+                          db: Session = Depends(get_db)):
+    """Artikelstamm aus einer CSV- oder JSON-Datei übernehmen – das
+    Gegenstück zum Kundenimport, nur mit den zwei Feldern, die ein Artikel
+    hat. Pflichtangabe ist die Bezeichnung; ein bereits vorhandener Artikel
+    (gleiche Bezeichnung) wird im Preis aktualisiert statt doppelt angelegt."""
+    raw_rows = await _read_import_rows(
+        file, PRODUCT_FIELD_BY_ALIAS, 'der Artikelbezeichnung (z. B. "name")',
+        "products", "product")
+
+    rows: list[schemas.ProductIn] = []
+    errors: list[str] = []
+    skipped = 0
+    for number, raw_row in enumerate(raw_rows, start=1):
+        values = _map_row(raw_row, PRODUCT_FIELD_BY_ALIAS, PRODUCT_NUMBER_FIELDS)
+        if not values.get("name"):
+            skipped += 1
+            continue
+        try:
+            rows.append(schemas.ProductIn(**values))
+        except ValidationError:
+            skipped += 1
+            if len(errors) < IMPORT_MAX_ERRORS:
+                errors.append(f"Datensatz {number} ({values['name']}): ungültige Werte")
+
+    created, updated = crud.import_products(db, rows)
+    crud.log_action(db, auth.current_user(request) or "", "import", "product", None,
+                    f"Import: {created} neu, {updated} aktualisiert, "
+                    f"{skipped} übersprungen")
+    return schemas.ProductImportResult(created=created, updated=updated,
+                                       skipped=skipped, errors=errors)
+
+
+@app.get("/api/products/export.csv")
+def export_products_csv(db: Session = Depends(get_db)):
+    """Massenexport aller Artikel als CSV – Gegenstück zum Import."""
+    products = db.query(models.Product).order_by(models.Product.name.asc()).all()
+    text_content = _write_csv(
+        ["Name", "Standardpreis", "Status"],
+        [[p.name, p.unit_price, "aktiv" if p.active else "inaktiv"] for p in products],
+    )
+    return _csv_response(text_content, "artikel-export.csv")
+
+
 # --------------------------- Angebote (Quotes) ---------------------------
 @app.get("/api/quotes", response_model=list[schemas.QuoteOut])
 def list_quotes(response: Response, search: str | None = None,
@@ -703,13 +811,45 @@ def get_quote(quote_id: int, db: Session = Depends(get_db)):
     return quote
 
 
+@app.get("/api/quotes/{quote_id}/lock", response_model=schemas.LockOut)
+def get_quote_lock(quote_id: int, request: Request, db: Session = Depends(get_db)):
+    quote = crud.get_quote(db, quote_id)
+    if not quote:
+        raise HTTPException(404, "Angebot nicht gefunden")
+    return crud.lock_status(quote, auth.current_user(request))
+
+
+@app.post("/api/quotes/{quote_id}/lock", response_model=schemas.LockOut)
+def acquire_quote_lock(quote_id: int, request: Request, db: Session = Depends(get_db)):
+    quote = crud.get_quote(db, quote_id)
+    if not quote:
+        raise HTTPException(404, "Angebot nicht gefunden")
+    username = auth.current_user(request)
+    crud.acquire_lock(db, quote, username)
+    return crud.lock_status(quote, username)
+
+
+@app.delete("/api/quotes/{quote_id}/lock", response_model=schemas.LockOut)
+def release_quote_lock(quote_id: int, request: Request, db: Session = Depends(get_db)):
+    quote = crud.get_quote(db, quote_id)
+    if not quote:
+        raise HTTPException(404, "Angebot nicht gefunden")
+    username = auth.current_user(request)
+    crud.release_lock(db, quote, username)
+    return crud.lock_status(quote, username)
+
+
 @app.put("/api/quotes/{quote_id}", response_model=schemas.QuoteOut)
-def edit_quote(quote_id: int, data: schemas.QuoteIn, db: Session = Depends(get_db)):
+def edit_quote(quote_id: int, data: schemas.QuoteIn, request: Request,
+               db: Session = Depends(get_db)):
     quote = crud.get_quote(db, quote_id)
     if not quote:
         raise HTTPException(404, "Angebot nicht gefunden")
     if quote.status == models.QUOTE_CONVERTED:
         raise HTTPException(400, "Umgewandeltes Angebot kann nicht mehr bearbeitet werden")
+    username = auth.current_user(request)
+    if not crud.lock_status(quote, username)["editable"]:
+        raise HTTPException(409, f"Wird gerade von {quote.locked_by} bearbeitet")
     return crud.update_quote(db, quote, data)
 
 
@@ -794,11 +934,43 @@ def get_delivery_note(dn_id: int, db: Session = Depends(get_db)):
     return dn
 
 
-@app.put("/api/delivery-notes/{dn_id}", response_model=schemas.DeliveryNoteOut)
-def edit_delivery_note(dn_id: int, data: schemas.DeliveryNoteIn, db: Session = Depends(get_db)):
+@app.get("/api/delivery-notes/{dn_id}/lock", response_model=schemas.LockOut)
+def get_delivery_note_lock(dn_id: int, request: Request, db: Session = Depends(get_db)):
     dn = crud.get_delivery_note(db, dn_id)
     if not dn:
         raise HTTPException(404, "Lieferschein nicht gefunden")
+    return crud.lock_status(dn, auth.current_user(request))
+
+
+@app.post("/api/delivery-notes/{dn_id}/lock", response_model=schemas.LockOut)
+def acquire_delivery_note_lock(dn_id: int, request: Request, db: Session = Depends(get_db)):
+    dn = crud.get_delivery_note(db, dn_id)
+    if not dn:
+        raise HTTPException(404, "Lieferschein nicht gefunden")
+    username = auth.current_user(request)
+    crud.acquire_lock(db, dn, username)
+    return crud.lock_status(dn, username)
+
+
+@app.delete("/api/delivery-notes/{dn_id}/lock", response_model=schemas.LockOut)
+def release_delivery_note_lock(dn_id: int, request: Request, db: Session = Depends(get_db)):
+    dn = crud.get_delivery_note(db, dn_id)
+    if not dn:
+        raise HTTPException(404, "Lieferschein nicht gefunden")
+    username = auth.current_user(request)
+    crud.release_lock(db, dn, username)
+    return crud.lock_status(dn, username)
+
+
+@app.put("/api/delivery-notes/{dn_id}", response_model=schemas.DeliveryNoteOut)
+def edit_delivery_note(dn_id: int, data: schemas.DeliveryNoteIn, request: Request,
+                       db: Session = Depends(get_db)):
+    dn = crud.get_delivery_note(db, dn_id)
+    if not dn:
+        raise HTTPException(404, "Lieferschein nicht gefunden")
+    username = auth.current_user(request)
+    if not crud.lock_status(dn, username)["editable"]:
+        raise HTTPException(409, f"Wird gerade von {dn.locked_by} bearbeitet")
     return crud.update_delivery_note(db, dn, data)
 
 
@@ -1074,6 +1246,35 @@ def revenue_report_csv(start: date | None = FromDate, end: date | None = ToDate,
     a, b = _period(start, end)
     return _csv_response(reports.revenue_report_csv(reports.revenue_report(db, a, b)),
                          f"Erloese_{a.isoformat()}_{b.isoformat()}.csv")
+
+
+def _custom_report_args(doc_type: str, group_by: str) -> None:
+    if doc_type not in reports.DOC_TYPES:
+        raise HTTPException(400, f"Unbekannte Belegart: {doc_type}")
+    if group_by not in reports.GROUP_BY_OPTIONS:
+        raise HTTPException(400, f"Unbekannte Gruppierung: {group_by}")
+
+
+@app.get("/api/reports/custom")
+def custom_report(doc_type: str, start: date | None = FromDate, end: date | None = ToDate,
+                  group_by: str = "none", status: str | None = None,
+                  db: Session = Depends(get_db)):
+    """Freier Report-Builder: eine Belegart (invoice/quote/delivery_note/
+    credit_note), ein Zeitraum, ein optionaler Statusfilter, gruppiert nach
+    nichts/Kunde/Monat/Status."""
+    _custom_report_args(doc_type, group_by)
+    return reports.custom_report(db, doc_type, *_period(start, end), group_by, status)
+
+
+@app.get("/api/reports/custom.csv")
+def custom_report_csv(doc_type: str, start: date | None = FromDate, end: date | None = ToDate,
+                      group_by: str = "none", status: str | None = None,
+                      db: Session = Depends(get_db)):
+    _custom_report_args(doc_type, group_by)
+    a, b = _period(start, end)
+    report = reports.custom_report(db, doc_type, a, b, group_by, status)
+    return _csv_response(reports.custom_report_csv(report),
+                         f"Report_{doc_type}_{a.isoformat()}_{b.isoformat()}.csv")
 
 
 # --------------------------- PDF-Vorlagen --------------------------------

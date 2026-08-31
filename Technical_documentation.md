@@ -22,6 +22,26 @@ The `web` container serves both the JSON API and the static frontend
 (vanilla JS/HTML/CSS under `backend/app/static`) from the same FastAPI app.
 There is no separate frontend build step or framework.
 
+The same picture as a diagram, with the backup service's relationship to the
+database and the `web` container made explicit (it writes dumps, `web` only
+reads them for the admin backup UI):
+
+```mermaid
+flowchart LR
+    Client(["Browser"])
+    Nginx["Nginx<br/>(reverse proxy, TLS)"]
+    Web["FastAPI web<br/>(API + static frontend)"]
+    DB[("PostgreSQL")]
+    Mail["MailHog (dev)<br/>or real SMTP (prod)"]
+    Backup["backup service<br/>(pg_dump, daily, ./backups)"]
+
+    Client <--> Nginx <--> Web
+    Web <--> DB
+    Web -- SMTP --> Mail
+    Backup -- pg_dump --> DB
+    Backup -. read-only mount .-> Web
+```
+
 TECHNOLOGY STACK:
 +------------+-------------------+-----------------------------------------+
 | Component  | Technology        | Purpose                                  |
@@ -33,7 +53,7 @@ TECHNOLOGY STACK:
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 211 backend + 73 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 249 backend + 95 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -125,6 +145,69 @@ can carry the same running number forward with just the prefix changed
 serialized with a PostgreSQL advisory transaction lock
 (`pg_advisory_xact_lock`, fixed key) so concurrent users never collide.
 
+The tables and their relationships as an ER diagram (attributes trimmed to
+the ones that carry a relationship or explain the row; the full column list
+is the table above). `customer_name`/`customer_address`/`customer_contact_person`
+on every document are a *copy* taken at creation time, not a foreign key to
+`customers` — a later edit or anonymization of the customer record does not
+change wording on an already-issued document:
+
+```mermaid
+erDiagram
+    CUSTOMERS {
+        int id PK
+        string name
+        bool active
+    }
+    PRODUCTS {
+        int id PK
+        string name
+        numeric unit_price
+    }
+    QUOTES {
+        int id PK
+        string number
+        string status
+        int converted_invoice_id FK
+        int source_delivery_note_id FK
+    }
+    INVOICES {
+        int id PK
+        string number
+        string status
+        numeric paid_amount
+        string locked_by
+    }
+    DELIVERY_NOTES {
+        int id PK
+        string number
+        string status
+        int source_invoice_id FK
+    }
+    CREDIT_NOTES {
+        int id PK
+        string number
+        string status
+        int invoice_id FK
+    }
+    PDF_TEMPLATES {
+        int id PK
+        string name
+        bool is_default
+    }
+
+    QUOTES ||--o{ QUOTE_ITEMS : has
+    INVOICES ||--o{ INVOICE_ITEMS : has
+    DELIVERY_NOTES ||--o{ DELIVERY_NOTE_ITEMS : has
+    CREDIT_NOTES ||--o{ CREDIT_NOTE_ITEMS : has
+
+    QUOTES |o..o| INVOICES : "converted to (once)"
+    INVOICES |o..o| DELIVERY_NOTES : "converted to (once)"
+    DELIVERY_NOTES |o..o| QUOTES : "converted to (once)"
+    INVOICES ||--o{ CREDIT_NOTES : "credited by (many, capped at open amount)"
+    CUSTOMERS }o..o{ INVOICES : "name copied, no FK"
+```
+
 CREDIT NOTES:
 A credit note (`GS-YYYY-NNNN`, `crud.create_credit_note`) is its own document
 type, not a status on the invoice — an invoice can be credited in several
@@ -182,6 +265,36 @@ decimal commas, BOM). Neither knows expenses: the app does not track them, so
 the VAT report carries `input_tax_known: false` and the revenue report
 `expenses_tracked: false` rather than pretending to be a P&L.
 
+`custom_report()` is the third, open-ended analysis: one of the four document
+types, a period, an optional status filter, grouped by nothing (a plain
+document list), customer, month, or status. Unlike the two fixed reports it
+does not exclude anything on its own — a cancelled document counts unless the
+caller filters it out via `status` — because "free" here means the caller
+decides, not the report. `_HAS_AMOUNTS` is `False` for delivery notes (they
+carry no prices); the response then omits `net`/`tax`/`gross` entirely
+(`has_amounts: false`) rather than sending zeros that would look like real
+figures. Routes: `GET /api/reports/custom` and its `.csv` twin, both under
+`/api/reports/` and therefore covered by the response cache below.
+
+RESPONSE CACHE:
+`cache.py` holds the response of `/api/stats` and everything under
+`/api/reports/` (JSON and CSV alike) in process memory for
+`CACHE_TTL_SECONDS` (default 30 s), returned with an `X-Cache: HIT` header;
+a fresh computation is `X-Cache: MISS`. Registered as the innermost
+middleware — right before the route, after the login check — so a cache hit
+still goes through authentication and picks up the usual security/request-ID
+headers on the way back out (see MIDDLEWARE ORDER below). Only those few
+computation-heavy endpoints are cached; document and master-data lists are
+deliberately left out, because several users work on them live (presence,
+edit lock) and a stale answer there costs more than the milliseconds a plain
+indexed query saves. A successful write to `/api/invoices`, `/api/credit-notes`
+or `/api/admin/backups` clears the whole cache — with only a handful of
+entries ever cached, that is simpler and safer than invalidating per report —
+except the invoice lock endpoint (`.../lock`), whose 90-second heartbeat
+would otherwise clear it constantly for a change that affects neither revenue
+nor tax. Toggle with `CACHE_ENABLED`. State is per-process, like the login
+lockout, rate limit and monitoring counters.
+
 MONITORING:
 `monitoring.py` counts every request in an ASGI middleware (requests, status
 classes, slow requests, response-time sum/max, the last 20 server errors) and
@@ -216,6 +329,30 @@ show it instead of the button. The relationships are the parent side, so
 deleting an invoice nullifies `source_invoice_id` on its delivery note
 instead of failing on the foreign key — and frees the conversion again.
 
+The three conversions form a chain, not a triangle you could complete in one
+step — going all the way round (quote -> invoice -> delivery note -> quote)
+lands on a *second*, separate quote, not back on the first one:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant API as FastAPI
+    participant DB as PostgreSQL
+
+    U->>API: POST /api/quotes (AN-2026-0007)
+    API->>DB: insert quote
+    U->>API: POST /api/quotes/7/convert
+    API->>DB: insert invoice RE-2026-0007
+    API->>DB: quote.status = "umgewandelt", converted_invoice_id = 7
+    U->>API: POST /api/invoices/7/convert-to-delivery-note
+    API->>DB: insert delivery note LS-2026-0007
+    API->>DB: invoice.delivery_notes += [7]  (source_invoice_id)
+    U->>API: POST /api/delivery-notes/7/convert-to-quote
+    API->>DB: insert quote AN-2026-0008 (0007 already taken)
+    API->>DB: delivery_note.converted_quotes += [8]
+    Note over U,DB: A second attempt at any of the three POSTs gets HTTP 400<br/>and the existing document's number instead of a duplicate.
+```
+
 A delivery note has three states: `offen`, `abgeschlossen` and `storniert`
 (`models.DN_OPEN/DN_DONE/DN_CANCELLED`). `GET /api/delivery-notes/{id}/pdf`
 moves an open note to `abgeschlossen` — printing it is what hands it over —
@@ -223,6 +360,34 @@ while a cancelled one keeps its state. That is a side effect on a GET, chosen
 deliberately so the plain download link in the list stays a link; the frontend
 reloads the list right after the click. `PATCH .../status` can set any of the
 three, so a note can be reopened.
+
+```mermaid
+stateDiagram-v2
+    [*] --> offen: created
+    offen --> abgeschlossen: GET .../pdf (download)
+    abgeschlossen --> offen: PATCH .../status "offen"
+    offen --> storniert: PATCH .../status "storniert"
+    abgeschlossen --> storniert: PATCH .../status "storniert"
+    storniert --> [*]
+```
+
+Invoices have their own, separate state machine — a credit note lowers
+`remaining` but deliberately never flips the status to "bezahlt" by itself
+(see CREDIT NOTES above):
+
+```mermaid
+stateDiagram-v2
+    [*] --> offen: created
+    offen --> teilbezahlt: payment > 0, remaining > 0
+    teilbezahlt --> bezahlt: remaining <= 0
+    offen --> bezahlt: remaining <= 0
+    bezahlt --> offen: PATCH .../status "offen" (paid_amount reset to 0)
+    teilbezahlt --> offen: PATCH .../status "offen"
+    offen --> storniert
+    teilbezahlt --> storniert
+    bezahlt --> storniert
+    storniert --> [*]
+```
 
 The one conversion that can close the circle is delivery note -> quote
 (`crud.convert_delivery_note_to_quote`, the counterpart to quote -> invoice ->
@@ -237,17 +402,33 @@ skonto amount/date, line totals) are Python `@property` methods on the
 SQLAlchemy models, not stored columns — they are recalculated on every read.
 
 CONCURRENCY / EDIT LOCKING:
-Invoices carry `locked_by` / `locked_at`. A user opening an invoice for
-editing calls `POST /api/invoices/{id}/lock`; the lock is considered active
-for 5 minutes (`crud.LOCK_TIMEOUT`) from the last acquire/renew call and
-auto-expires after that. `PUT /api/invoices/{id}` is rejected with 409 if
-another user currently holds an active lock. Quotes and delivery notes do
-not currently have this locking mechanism.
+Invoices, quotes and delivery notes all carry `locked_by` / `locked_at` —
+originally an Invoice-only column pair, now on `Quote` and `DeliveryNote` as
+well (same two columns, same migration pattern). A user opening a document
+for editing calls `POST /api/{invoices|quotes|delivery-notes}/{id}/lock`; the
+lock is considered active for 5 minutes (`crud.LOCK_TIMEOUT`) from the last
+acquire/renew call and auto-expires after that. The corresponding `PUT` is
+rejected with 409 if another user currently holds an active lock. The four
+crud.py functions (`acquire_lock`, `release_lock`, `lock_status`, and the
+private `_lock_active`) work purely through the two columns and don't know
+which of the three types they're holding — the type hint is a `Lockable =
+Invoice | Quote | DeliveryNote` union rather than three separate copies. On
+the frontend, opening a quote or delivery note for editing now acquires the
+lock first (`await fetch(.../lock, {method:"POST"})`); if the response says
+`editable: false`, the click ends in an alert instead of a filled-in form —
+the same flow `openInvoiceForEdit` already had, just not copy-pasted three
+times: `startQuoteEdit`/`startDeliveryEdit` became `async` and gained their
+own heartbeat timer, lock banner and release-on-cancel/release-on-navigate,
+mirroring the invoice's `startLockHeartbeat`/`releaseInvoiceLock` under their
+own names. A merge-by-field alternative was considered and rejected: a lock
+is simpler, consistent with how invoices already worked, and the presence
+banner (below) already tells a second editor someone else is in there before
+they even try.
 
 LIVE PRESENCE ("someone else is here"):
 The lock stops two people from saving over each other, but says nothing
-while you are typing — and quotes/delivery notes have no lock at all. The
-`presence` table closes that gap: a client with a document open in a form
+while you are typing. The `presence` table closes that gap: a client with a
+document open in a form
 POSTs to `/api/presence/{doc_type}/{doc_id}` every 10 seconds
 (`crud.PRESENCE_HEARTBEAT`) and gets back everyone *else* currently on that
 document, which the frontend renders as a banner above the form. Rows without
@@ -265,6 +446,34 @@ straightforward to test. `doc_type` is validated against
 `models.PRESENCE_TYPES`. State lives in the database rather than in process
 memory, so unlike the login lockout this part would survive a second replica.
 
+Both mechanisms side by side for one invoice with two users open on it (the
+same sequence applies verbatim to a quote or delivery note, just with
+`/api/quotes/...` or `/api/delivery-notes/...` in place of `/api/invoices/...`)
+— Bernd sees the presence banner immediately, only finds out about the lock
+when he actually tries to save:
+
+```mermaid
+sequenceDiagram
+    participant Anna
+    participant API as FastAPI
+    participant Bernd
+
+    Anna->>API: POST /api/invoices/12/lock
+    API-->>Anna: locked_by=anna, editable=true
+    Anna->>API: POST /api/presence/invoice/12 (heartbeat, every 10s)
+    Bernd->>API: POST /api/presence/invoice/12 (heartbeat, every 10s)
+    API-->>Bernd: others=[anna]  → banner "anna has this open too"
+    Bernd->>API: GET /api/invoices/12/lock
+    API-->>Bernd: locked_by=anna, editable=false
+    Bernd->>API: PUT /api/invoices/12 (tries to save anyway)
+    API-->>Bernd: 409 "wird gerade von anna bearbeitet"
+    Anna->>API: PUT /api/invoices/12 (saves)
+    API-->>Anna: 200 OK
+    Anna->>API: DELETE /api/invoices/12/lock (leaves the form)
+    Bernd->>API: GET /api/invoices/12/lock
+    API-->>Bernd: locked=false, editable=true
+```
+
 API ENDPOINTS (see README.md for the full table grouped by resource):
 Invoices, quotes, delivery notes, customers, products, users, settings,
 dashboard stats, month export, audit log, and backup management are all
@@ -272,25 +481,36 @@ exposed under `/api/*`. Authentication endpoints (`/login`, `/logout`) and
 the SPA/static assets (`/`, `/static/*`, `/datenschutz`, `/health`) are
 outside `/api`.
 
-CUSTOMER IMPORT (`POST /api/customers/import`, multipart field `file`):
-Takes CSV *or* JSON. Parsing lives in `main.py` (`_import_text`,
-`_rows_from_csv`, `_rows_from_json`, `_map_customer_row`), writing in
-`crud.import_customers()`. The format is picked by file extension, falling
-back to the first non-space character (`{`/`[` means JSON). Both paths end up
-as plain dicts and go through the same `FIELD_BY_ALIAS` mapping, built from
-`CSV_COLUMNS` (German and English spellings per field); unknown keys such as
-`id`, `active` or `invoices` are ignored, so the JSON that
-`GET /api/customers/{id}/export` produces can be fed straight back in. JSON
-also accepts a bare object, a list of objects and `{"customers": [...]}`. A
-name is the only requirement, everything else falls back to the `CustomerIn`
-defaults; the delimiter (`;`, `,` or tab) is taken from the CSV header line,
-files are decoded as UTF-8 (BOM tolerated) or Windows-1252 for Excel exports,
-and `12,5` is read as `12.5`. Records are matched to existing customers by
-name, case-insensitively (`crud.get_customer_by_name`), so a re-import updates
-instead of duplicating; a record without a name or with values `CustomerIn`
-rejects is skipped and reported in `errors` rather than failing the whole
+CUSTOMER & PRODUCT IMPORT/EXPORT
+(`POST /api/customers/import`, `POST /api/products/import`, multipart field
+`file`; `GET /api/customers/export.csv`, `GET /api/products/export.csv`):
+Both imports take CSV *or* JSON and share one implementation in `main.py`
+(`_import_text`, `_field_for`, `_map_row`, `_rows_from_csv`, `_rows_from_json`,
+`_read_import_rows`) generalised over an alias map — `FIELD_BY_ALIAS`
+(built from `CSV_COLUMNS`) for customers, `PRODUCT_FIELD_BY_ALIAS`
+(`PRODUCT_CSV_COLUMNS`) for products, each mapping German *and* English
+column/key spellings onto the target schema's fields. Writing happens in
+`crud.import_customers()`/`crud.import_products()`, both match existing rows
+case-insensitively by name (`get_customer_by_name`/`get_product_by_name`) and
+update instead of duplicating. The format is picked by file extension,
+falling back to the first non-space character (`{`/`[` means JSON); unknown
+keys such as `id`, `active` or `invoices` are ignored, so the JSON that
+`GET /api/customers/{id}/export` produces can be fed straight back in
+(customer JSON also accepts a bare object, a list of objects, and
+`{"customers": [...]}`; products the equivalent `{"products": [...]}`). Only
+the name is required, everything else falls back to schema defaults; the CSV
+delimiter (`;`, `,` or tab) is taken from the header line, files are decoded
+as UTF-8 (BOM tolerated) or Windows-1252 for Excel exports, and `12,5` is
+read as `12.5`. A record without a name, or with values the target schema
+rejects, is skipped and reported in `errors` rather than failing the whole
 file. Caps: 1 MB, 5,000 records, 20 reported errors. Every import is written
 to the audit log.
+
+The two `export.csv` endpoints are the reverse direction — the full customer
+or product list, same columns as the import expects, so a round trip through
+export and re-import needs no manual editing. Built with `main._write_csv`
+(Python's `csv.writer`, not string concatenation), so a semicolon or
+quotation mark inside a customer name cannot shift the columns.
 
 SECURITY:
 - Password hashing: PBKDF2-HMAC-SHA256, 200,000 iterations, random 16-byte
@@ -352,12 +572,17 @@ Starlette runs the most recently registered middleware first, so the order in
 `main.py` is written back-to-front. Actual request order is:
 
   request-ID/logging -> security headers -> rate limit -> session ->
-  CSRF -> login check -> route
+  CSRF -> login check -> response cache -> route
 
 The session has to be established before CSRF (the token lives in it) and
 before the login check (it reads `request.session["user"]`); rate limiting and
 the header middleware sit outside so they still apply to requests that are
-rejected before ever reaching a route.
+rejected before ever reaching a route. The response cache is innermost of
+all, registered even before the login-check middleware: a cache hit must not
+bypass authentication, so login has to run first on the way in, and the cache
+still passes back out through every outer layer (security headers,
+request-ID, …) on the way out, whether the answer came from the cache or a
+fresh database query.
 
 LOGGING & ERROR HANDLING:
 `logging_setup.py` replaces the default uvicorn text output with one JSON
@@ -424,25 +649,29 @@ CSRF 403 (expired token). Values coming from the database are escaped with
 values via the DOM instead of the markup.
 
 TESTING & CI:
-`backend/tests/` holds 211 pytest tests driven through `httpx`/FastAPI's
+`backend/tests/` holds 249 pytest tests driven through `httpx`/FastAPI's
 `TestClient` against a temporary SQLite database (`conftest.py`), covering the
-invoice/quote/delivery-note lifecycles, customers and products, admin-only
-endpoints and the audit log, and the security layer itself (CSRF rejection,
-rate limiting, headers, login lockout). Run with `python -m pytest` in
-`backend/` after `pip install -r requirements-dev.txt`.
+invoice/quote/delivery-note lifecycles (locking included), customers and
+products (CRUD, import, export), reports (VAT, revenue, the custom report
+builder), the response cache, admin-only endpoints and the audit log, and the
+security layer itself (CSRF rejection, rate limiting, headers, login
+lockout). Run with `python -m pytest` in `backend/` after
+`pip install -r requirements-dev.txt`.
 
 The two PostgreSQL-specific pieces are dialect-guarded so the suite can run on
 SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 73 frontend tests that load the real
+`backend/tests/frontend/` holds 95 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
-the customer picker, the draft cache, the list filters, the sample-file
-downloads (CSV/JSON), the post-save navigation into the invoice overview, the
-delivery-note list, the CSRF header and the HTML escaping (`npm install &&
-npm test`, needs Node >= 20). A stubbed route may be a function of the request
-options when GET and POST on the same path must differ.
+the customer picker, the draft cache, the list filters, the sample-file and
+mass-export downloads (CSV/JSON), the customer/product import, the post-save
+navigation into the invoice overview, the delivery-note list, the report
+builder, the edit lock on quotes and delivery notes, the CSRF header and the
+HTML escaping (`npm install && npm test`, needs Node >= 20). A stubbed route
+may be a function of the request options when GET and POST on the same path
+must differ.
 
 `.github/workflows/ci.yml` runs four jobs on every push and PR: the backend
 suite, the frontend suite, static checks (`compileall`, `bash -n` and
@@ -485,10 +714,9 @@ BACKUP:
 - Manual backup: `docker exec -t rechnung_db pg_dump -U <user> -F c -b -v -f backup.dump <db>`
 
 NOT IMPLEMENTED (do not assume these exist; see TODO.md for the full audit):
-horizontal scaling / load balancing (the login-lockout and rate-limit counters
-are per-process and would need Redis or similar first), response caching, DB
-connection pooling beyond SQLAlchemy defaults, application monitoring /
-observability, multi-currency, recurring invoices, credit notes as a distinct
-document type, approval workflows, customer groups/credit limits,
-customer/product CSV import-export, custom PDF templates, document
-attachments, a custom report builder, and a dedicated VAT/tax-return export.
+horizontal scaling / load balancing (the login-lockout, rate-limit and
+response-cache state are all per-process and would need Redis or similar
+first), DB connection pooling beyond SQLAlchemy defaults, multi-currency,
+recurring invoices, approval workflows, customer groups/credit limits,
+document attachments, and a dedicated VAT/tax-return export (the UStVA report
+above is a basis for one, not an ELSTER-ready submission).

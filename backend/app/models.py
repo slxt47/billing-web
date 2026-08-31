@@ -47,8 +47,10 @@ class Invoice(Base):
     # Zahlungseingang (für Teilzahlungen)
     paid_amount = Column(Numeric(12, 2), nullable=False, default=0)
 
-    # Bearbeitungssperre: verhindert, dass zwei Benutzer gleichzeitig dieselbe
-    # Rechnung bearbeiten. Läuft nach LOCK_TIMEOUT automatisch ab (siehe crud.py).
+    # Bearbeitungssperre: verhindert, dass zwei Benutzer gleichzeitig denselben
+    # Beleg bearbeiten. Läuft nach LOCK_TIMEOUT automatisch ab (siehe crud.py).
+    # Quote und DeliveryNote (weiter unten) haben dieselben zwei Spalten und
+    # dieselben crud.py-Funktionen – nur Invoice hatte sie zuerst.
     locked_by = Column(String(80), nullable=True)
     locked_at = Column(DateTime, nullable=True)
 
@@ -230,10 +232,10 @@ class Presence(Base):
     """Wer hat gerade welchen Beleg offen – Grundlage der Live-Anzeige
     „jemand anderes ist auch hier".
 
-    Ergänzt die Bearbeitungssperre auf Rechnungen (die verhindert, dass zwei
-    Leute gleichzeitig speichern) um die fehlende Rückmeldung *währenddessen*
-    – und deckt zusätzlich Angebote und Lieferscheine ab, die gar keine
-    Sperre haben.
+    Ergänzt die Bearbeitungssperre (die verhindert, dass zwei Leute
+    gleichzeitig speichern) um die fehlende Rückmeldung *währenddessen* – wer
+    einen Beleg öffnet, sieht sofort, dass jemand anderes gerade daran sitzt,
+    statt erst beim Speichern auf die Sperre zu laufen.
 
     Die Zeilen sind kurzlebig: ein Client meldet sich alle paar Sekunden,
     Einträge ohne Lebenszeichen gelten nach PRESENCE_TIMEOUT als weg und
@@ -300,6 +302,12 @@ class Quote(Base):
     # Lieferschein zweimal zu einem Angebot wird).
     source_delivery_note_id = Column(Integer, ForeignKey("delivery_notes.id"),
                                      nullable=True)
+
+    # Bearbeitungssperre wie bei Invoice (siehe dort) – dieselben crud.py-
+    # Funktionen (acquire_lock/release_lock/lock_status) arbeiten auf allen
+    # drei Spalten-Trios, nicht nur auf Invoice.
+    locked_by = Column(String(80), nullable=True)
+    locked_at = Column(DateTime, nullable=True)
 
     items = relationship(
         "QuoteItem",
@@ -383,6 +391,10 @@ class DeliveryNote(Base):
     status = Column(String(20), nullable=False, default=DN_OPEN)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     source_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+
+    # Bearbeitungssperre wie bei Invoice (siehe dort).
+    locked_by = Column(String(80), nullable=True)
+    locked_at = Column(DateTime, nullable=True)
 
     items = relationship(
         "DeliveryNoteItem",

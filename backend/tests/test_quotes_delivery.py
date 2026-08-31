@@ -87,6 +87,43 @@ def test_quote_search_and_pagination(user_client):
     assert page.headers["X-Total-Count"] == "2"
 
 
+# --------------------------- Angebote: Bearbeitungssperre -----------------
+# Dasselbe Verhalten wie bei Rechnungen (test_invoices.py), nur auf Quote.
+def test_quote_lock_blocks_a_second_user(client):
+    from conftest import ADMIN, USER, do_login
+    do_login(client, *USER)
+    quote = client.post("/api/quotes", json=QUOTE).json()
+    lock = client.post(f"/api/quotes/{quote['id']}/lock").json()
+    assert lock["editable"] is True and lock["locked_by"] == "tester"
+
+    do_login(client, *ADMIN)
+    status = client.get(f"/api/quotes/{quote['id']}/lock").json()
+    assert status["locked"] is True and status["editable"] is False
+
+    blocked = client.put(f"/api/quotes/{quote['id']}", json=QUOTE)
+    assert blocked.status_code == 409
+
+
+def test_quote_lock_is_released_again(user_client):
+    quote = user_client.post("/api/quotes", json=QUOTE).json()
+    user_client.post(f"/api/quotes/{quote['id']}/lock")
+    released = user_client.delete(f"/api/quotes/{quote['id']}/lock").json()
+    assert released["locked"] is False
+
+
+def test_expired_quote_lock_does_not_block(user_client):
+    from datetime import datetime, timedelta
+    from app import models
+    from app.database import SessionLocal
+    quote = user_client.post("/api/quotes", json=QUOTE).json()
+    with SessionLocal() as db:
+        row = db.get(models.Quote, quote["id"])
+        row.locked_by = "jemand-anderes"
+        row.locked_at = datetime.utcnow() - timedelta(minutes=10)
+        db.commit()
+    assert user_client.get(f"/api/quotes/{quote['id']}/lock").json()["editable"] is True
+
+
 # --------------------------- Lieferscheine --------------------------------
 def test_create_delivery_note(user_client):
     note = user_client.post("/api/delivery-notes", json=NOTE).json()
@@ -173,6 +210,42 @@ def test_delivery_note_search(user_client):
     user_client.post("/api/delivery-notes", json={**NOTE, "customer_name": "Süd"})
     assert len(user_client.get("/api/delivery-notes?search=nord").json()) == 1
     assert user_client.get("/api/delivery-notes").headers["X-Total-Count"] == "2"
+
+
+# --------------------------- Lieferscheine: Bearbeitungssperre ------------
+def test_delivery_note_lock_blocks_a_second_user(client):
+    from conftest import ADMIN, USER, do_login
+    do_login(client, *USER)
+    note = client.post("/api/delivery-notes", json=NOTE).json()
+    lock = client.post(f"/api/delivery-notes/{note['id']}/lock").json()
+    assert lock["editable"] is True and lock["locked_by"] == "tester"
+
+    do_login(client, *ADMIN)
+    status = client.get(f"/api/delivery-notes/{note['id']}/lock").json()
+    assert status["locked"] is True and status["editable"] is False
+
+    blocked = client.put(f"/api/delivery-notes/{note['id']}", json=NOTE)
+    assert blocked.status_code == 409
+
+
+def test_delivery_note_lock_is_released_again(user_client):
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    user_client.post(f"/api/delivery-notes/{note['id']}/lock")
+    released = user_client.delete(f"/api/delivery-notes/{note['id']}/lock").json()
+    assert released["locked"] is False
+
+
+def test_expired_delivery_note_lock_does_not_block(user_client):
+    from datetime import datetime, timedelta
+    from app import models
+    from app.database import SessionLocal
+    note = user_client.post("/api/delivery-notes", json=NOTE).json()
+    with SessionLocal() as db:
+        row = db.get(models.DeliveryNote, note["id"])
+        row.locked_by = "jemand-anderes"
+        row.locked_at = datetime.utcnow() - timedelta(minutes=10)
+        db.commit()
+    assert user_client.get(f"/api/delivery-notes/{note['id']}/lock").json()["editable"] is True
 
 
 # --------------------------- Lieferschein -> Angebot ----------------------

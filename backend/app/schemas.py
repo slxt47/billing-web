@@ -143,12 +143,21 @@ class ProductOut(ProductIn):
         from_attributes = True
 
 
-class CustomerImportResult(BaseModel):
-    """Ergebnis eines CSV-Imports: was ist angelegt, aktualisiert, übersprungen."""
+class ImportResult(BaseModel):
+    """Ergebnis eines CSV-/JSON-Imports: was ist angelegt, aktualisiert,
+    übersprungen. Gemeinsame Form für Kunden- und Artikelimport."""
     created: int = 0
     updated: int = 0
     skipped: int = 0
     errors: list[str] = []
+
+
+class CustomerImportResult(ImportResult):
+    pass
+
+
+class ProductImportResult(ImportResult):
+    pass
 
 
 class ActiveUpdate(BaseModel):
@@ -249,6 +258,8 @@ class QuoteOut(BaseModel):
     net: float
     tax_amount: float
     total: float
+    locked_by: Optional[str] = None
+    locked_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -314,6 +325,8 @@ class DeliveryNoteOut(BaseModel):
     source_invoice_id: Optional[int]
     converted_quote_number: Optional[str] = None
     items: list[DeliveryNoteItemOut]
+    locked_by: Optional[str] = None
+    locked_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

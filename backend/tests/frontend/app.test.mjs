@@ -113,13 +113,25 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
       "/api/audit-log": [],
       "/api/pdf-templates": [],
       "/api/credit-notes": [],
+      "/api/reports/custom": {
+        doc_type: "invoice", group_by: "none", status: null,
+        from: "2026-01-01", to: "2026-12-31", has_amounts: true, rows: [],
+        totals: { count: 0, item_count: 0, net: 0, tax: 0, gross: 0 },
+      },
       "/api/admin/backups": [],
       ...routes,
     };
     if (/^\/api\/presence\/[a-z_]+\/\d+$/.test(path)) {
       return response({ others });
     }
-    const route = path in table ? table[path] : { ok: true };
+    // Bearbeitungssperre (Rechnung/Angebot/Lieferschein): ohne ausdrückliche
+    // Route (per exaktem Pfad in `routes`, hat Vorrang) gilt der Beleg als
+    // frei – die meisten Tests wollen mit der Sperre gar nichts zu tun haben.
+    const lockDefault = { locked: true, locked_by: "tester",
+                          locked_at: "2026-01-01T00:00:00", editable: true };
+    const route = path in table ? table[path]
+      : /^\/api\/(invoices|quotes|delivery-notes)\/\d+\/lock$/.test(path) ? lockDefault
+      : { ok: true };
     // Eine Route darf eine Funktion sein, wenn GET und POST sich
     // unterscheiden müssen (z. B. Liste holen vs. Rechnung anlegen), und sie
     // darf statt der Daten eine fertige Antwort liefern (z. B. mit Status 503).
@@ -507,6 +519,57 @@ test("Beim Bearbeiten eines Angebots wird ein Heartbeat geschickt", async () => 
   assert.equal(beat.options.headers.get("X-CSRF-Token"), "token-aus-dem-cookie");
 });
 
+// ------------------------------------------- Bearbeitungssperre (Angebot)
+test("Das Bearbeiten eines Angebots sperrt es und zeigt den Hinweis", async () => {
+  const { window, requests } = startApp();
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+
+  window.document.querySelectorAll("#quotes-body button[data-act=edit]")[0].click();
+  await settle(50);
+
+  const lockReq = requests.find((r) => r.url === "/api/quotes/1/lock"
+                                    && r.options.method === "POST");
+  assert.ok(lockReq, "POST /api/quotes/1/lock");
+  assert.equal(window.document.querySelector("#quote-lock-banner").hidden, false);
+  assert.match(window.document.querySelector("#quote-lock-banner").textContent, /gesperrt/);
+  assert.equal(window.document.querySelector("#quote-form [name=customer_name]").value, "Alpha AG");
+});
+
+test("Ein bereits gesperrtes Angebot lässt sich nicht öffnen", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/quotes/1/lock": { locked: true, locked_by: "anna", editable: false } },
+  });
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+  window.alert = (msg) => { window._alerted = msg; };
+
+  window.document.querySelectorAll("#quotes-body button[data-act=edit]")[0].click();
+  await settle(50);
+
+  assert.match(window._alerted || "", /anna/);
+  // Das Formular bleibt leer – ohne editable:true wird nichts befüllt.
+  assert.equal(window.document.querySelector("#quote-form [name=customer_name]").value, "");
+  assert.ok(!requests.some((r) => r.url === "/api/presence/quote/1"));
+});
+
+test("Abbrechen gibt die Angebotssperre wieder frei", async () => {
+  const { window, requests } = startApp();
+  await settle();
+  window.document.querySelector("#nav-quotes").click();
+  await settle();
+  window.document.querySelectorAll("#quotes-body button[data-act=edit]")[0].click();
+  await settle(50);
+
+  window.document.querySelector("#quote-cancel-edit").click();
+  await settle(20);
+
+  assert.ok(requests.some((r) => r.url === "/api/quotes/1/lock" && r.options.method === "DELETE"));
+  assert.equal(window.document.querySelector("#quote-lock-banner").hidden, true);
+});
+
 test("Andere Anwesende erscheinen als Banner über dem Formular", async () => {
   const { window } = startApp({ others: [{ username: "anna", last_seen: "2026-08-27T10:00:00" }] });
   await settle();
@@ -767,6 +830,71 @@ test("Die Dateiauswahl selbst ist nicht sichtbar", async () => {
   assert.equal(window.document.querySelector("#customer-import-file").hidden, true);
 });
 
+test("Alle Kunden lassen sich als CSV herunterladen", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#customer-export-csv").click();
+
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].href, "/api/customers/export.csv");
+});
+
+// -------------------------------- Artikel-Import / -Export
+test("Der Artikel-Import schickt die Datei und meldet das Ergebnis", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/products/import": { created: 1, updated: 1, skipped: 0, errors: [] } },
+  });
+  await settle();
+  window.document.querySelector("#nav-products").click();
+  await settle();
+
+  pickFile(window, "#product-import-file", "artikel.csv", "text/csv");
+  await settle(50);
+
+  const upload = requests.find((r) => r.url === "/api/products/import");
+  assert.ok(upload, "POST /api/products/import");
+  assert.equal(upload.options.method, "POST");
+  assert.equal(upload.options.headers.get("X-CSRF-Token"), "token-aus-dem-cookie");
+
+  const msg = window.document.querySelector("#product-import-msg").textContent;
+  assert.match(msg, /1 neu angelegt/);
+  assert.match(msg, /1 aktualisiert/);
+});
+
+test("Der Artikel-Import-Knopf öffnet nur den Dateidialog", async () => {
+  const { window, requests } = startApp();
+  await settle();
+  window.document.querySelector("#nav-products").click();
+  await settle();
+
+  const input = window.document.querySelector("#product-import-file");
+  let opened = 0;
+  input.click = () => { opened += 1; };
+  window.document.querySelector("#product-import-btn").click();
+  await settle(20);
+
+  assert.equal(opened, 1, "der Knopf öffnet die Dateiauswahl");
+  assert.ok(!requests.some((r) => r.url === "/api/products/import"),
+            "ohne Datei wird nichts hochgeladen");
+});
+
+test("Alle Artikel lassen sich als CSV herunterladen", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-products").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#product-export-csv").click();
+
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].href, "/api/products/export.csv");
+});
+
 // -------------------------------- Gutschriften
 const CREDIT_ROW = {
   id: 4, number: "GS-2026-0004", customer_name: "Alpha AG", invoice_id: 3,
@@ -937,6 +1065,103 @@ test("Der Zeitraum wandert in den CSV-Export", async () => {
   assert.match(downloads[0].href, /^\/api\/reports\/vat\.csv\?/);
   assert.match(downloads[0].href, /from=2026-03-01/);
   assert.match(downloads[0].href, /to=2026-03-31/);
+});
+
+// -------------------------------- Freier Report-Builder
+const CUSTOM_REPORT_LIST = {
+  doc_type: "invoice", group_by: "none", status: null,
+  from: "2026-01-01", to: "2026-12-31", has_amounts: true,
+  rows: [{ number: "RE-2026-0001", customer_name: "Alpha AG", issue_date: "2026-01-05",
+           status: "offen", item_count: 1, net: 200, tax: 40, gross: 240 }],
+  totals: { count: 1, item_count: 1, net: 200, tax: 40, gross: 240 },
+};
+const CUSTOM_REPORT_GROUPED = {
+  doc_type: "delivery_note", group_by: "customer", status: null,
+  from: "2026-01-01", to: "2026-12-31", has_amounts: false,
+  rows: [{ group: "Liefer GmbH", count: 2, item_count: 3 }],
+  totals: { count: 2, item_count: 3, net: null, tax: null, gross: null },
+};
+
+test("Der Report-Builder lädt beim Öffnen der Auswertungen und zeigt die Liste", async () => {
+  const { window, requests } = startApp({
+    routes: {
+      "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT,
+      "/api/reports/custom": CUSTOM_REPORT_LIST,
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+
+  assert.ok(requests.some((r) => r.url.startsWith("/api/reports/custom?")
+                              && r.url.includes("doc_type=invoice")));
+  assert.match(window.document.querySelector("#custom-report-head").textContent, /Nummer/);
+  assert.match(window.document.querySelector("#custom-report-body").textContent, /RE-2026-0001/);
+  assert.match(window.document.querySelector("#custom-report-body").textContent, /Alpha AG/);
+  assert.equal(window.document.querySelector("#custom-report-empty").hidden, true);
+});
+
+test("Ohne Geldbeträge zeigt der Report-Builder nur Anzahl und Positionen", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT,
+      "/api/reports/custom": CUSTOM_REPORT_GROUPED,
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+
+  const head = window.document.querySelector("#custom-report-head").textContent;
+  assert.match(head, /Kunde/);
+  assert.ok(!/Netto/.test(head), "Lieferscheine kennen keine Preise");
+  assert.match(window.document.querySelector("#custom-report-body").textContent, /Liefer GmbH/);
+});
+
+test("Belegart und Gruppierung wandern in die Anfrage und den CSV-Export", async () => {
+  const { window, requests } = startApp({
+    routes: {
+      "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT,
+      "/api/reports/custom": CUSTOM_REPORT_LIST,
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#custom-report-doctype").value = "quote";
+  window.document.querySelector("#custom-report-doctype").dispatchEvent(new window.Event("change"));
+  await settle(20);
+  window.document.querySelector("#custom-report-groupby").value = "month";
+  window.document.querySelector("#custom-report-groupby").dispatchEvent(new window.Event("change"));
+  await settle(20);
+
+  assert.ok(requests.some((r) => r.url.includes("doc_type=quote") && r.url.includes("group_by=month")));
+
+  window.document.querySelector("#custom-report-csv").click();
+  assert.equal(downloads.length, 1);
+  assert.match(downloads[0].href, /^\/api\/reports\/custom\.csv\?/);
+  assert.match(downloads[0].href, /doc_type=quote/);
+  assert.match(downloads[0].href, /group_by=month/);
+});
+
+test("Ohne Treffer zeigt der Report-Builder einen Hinweis", async () => {
+  const { window } = startApp({
+    routes: {
+      "/api/reports/vat": VAT_REPORT, "/api/reports/revenue": REVENUE_REPORT,
+      "/api/reports/custom": {
+        doc_type: "invoice", group_by: "none", status: "storniert",
+        from: "2026-01-01", to: "2026-12-31", has_amounts: true, rows: [],
+        totals: { count: 0, item_count: 0, net: 0, tax: 0, gross: 0 },
+      },
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-reports").click();
+  await settle(50);
+
+  assert.equal(window.document.querySelector("#custom-report-empty").hidden, false);
 });
 
 // -------------------------------- Monitoring
@@ -1441,6 +1666,75 @@ const DN_OPEN_ROW = {
   issue_date: "2026-02-01", status: "offen", items: [],
 };
 
+// -------------------------------- Bearbeitungssperre (Lieferschein)
+test("Das Bearbeiten eines Lieferscheins sperrt ihn und zeigt den Hinweis", async () => {
+  const { window, requests } = startApp({ routes: { "/api/delivery-notes": [DN_OPEN_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+
+  window.document.querySelector("#delivery-body button[data-act=edit]").click();
+  await settle(50);
+
+  const lockReq = requests.find((r) => r.url === "/api/delivery-notes/5/lock"
+                                    && r.options.method === "POST");
+  assert.ok(lockReq, "POST /api/delivery-notes/5/lock");
+  assert.equal(window.document.querySelector("#delivery-lock-banner").hidden, false);
+  assert.equal(window.document.querySelector("#delivery-form [name=customer_name]").value,
+              "Alpha AG");
+});
+
+test("Ein bereits gesperrter Lieferschein lässt sich nicht öffnen", async () => {
+  const { window, requests } = startApp({
+    routes: {
+      "/api/delivery-notes": [DN_OPEN_ROW],
+      "/api/delivery-notes/5/lock": { locked: true, locked_by: "bernd", editable: false },
+    },
+  });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+  window.alert = (msg) => { window._alerted = msg; };
+
+  window.document.querySelector("#delivery-body button[data-act=edit]").click();
+  await settle(50);
+
+  assert.match(window._alerted || "", /bernd/);
+  assert.equal(window.document.querySelector("#delivery-form [name=customer_name]").value, "");
+  assert.ok(!requests.some((r) => r.url === "/api/presence/delivery_note/5"));
+});
+
+test("Abbrechen gibt die Lieferschein-Sperre wieder frei", async () => {
+  const { window, requests } = startApp({ routes: { "/api/delivery-notes": [DN_OPEN_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+  window.document.querySelector("#delivery-body button[data-act=edit]").click();
+  await settle(50);
+
+  window.document.querySelector("#delivery-cancel-edit").click();
+  await settle(20);
+
+  assert.ok(requests.some((r) => r.url === "/api/delivery-notes/5/lock"
+                              && r.options.method === "DELETE"));
+  assert.equal(window.document.querySelector("#delivery-lock-banner").hidden, true);
+});
+
+test("Ein Wechsel der Ansicht gibt eine offene Lieferschein-Sperre frei", async () => {
+  const { window, requests } = startApp({ routes: { "/api/delivery-notes": [DN_OPEN_ROW] } });
+  await settle();
+  window.document.querySelector("#nav-delivery").click();
+  await settle();
+  window.document.querySelector("#delivery-body button[data-act=edit]").click();
+  await settle(50);
+
+  window.document.querySelector("#nav-customers").click();
+  await settle(20);
+
+  assert.ok(requests.some((r) => r.url === "/api/delivery-notes/5/lock"
+                              && r.options.method === "DELETE"));
+});
+
 test("Der PDF-Download lädt die Lieferscheinliste neu", async () => {
   const { window, requests } = startApp({
     routes: { "/api/delivery-notes": [DN_OPEN_ROW] },
@@ -1629,7 +1923,8 @@ test("Leere Hinweisbanner werden nicht angezeigt", () => {
                         { pretendToBeVisual: true });
   openWindows.push(dom.window);
 
-  for (const sel of ["#lock-banner", "#invoice-presence", "#quote-presence",
+  for (const sel of ["#lock-banner", "#quote-lock-banner", "#delivery-lock-banner",
+                     "#invoice-presence", "#quote-presence",
                      "#delivery-presence", "#invoice-draft-banner",
                      "#quote-draft-banner", "#delivery-draft-banner",
                      "#customer-import-file", "#customer-import-example-menu",

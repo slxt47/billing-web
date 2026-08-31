@@ -92,13 +92,17 @@ RATE_LIMIT_WINDOW=60
 ```
 
 ### 409 „Wird gerade von … bearbeitet"
-Die Bearbeitungssperre einer Rechnung. Sie läuft 5 Minuten nach der letzten
-Aktivität automatisch ab. Wer den Tab einfach schließt, hält sie also
-höchstens 5 Minuten. Sofort freigeben (als Admin, direkt in der DB):
+Die Bearbeitungssperre eines Belegs – gilt für Rechnungen, Angebote und
+Lieferscheine gleichermaßen. Sie läuft 5 Minuten nach der letzten Aktivität
+automatisch ab. Wer den Tab einfach schließt, hält sie also höchstens
+5 Minuten. Sofort freigeben (als Admin, direkt in der DB; Tabelle je nach
+Belegart `invoices`, `quotes` oder `delivery_notes`):
 
 ```bash
 docker exec -it rechnung_db psql -U rechnung -d rechnung \
   -c "UPDATE invoices SET locked_by = NULL, locked_at = NULL WHERE number = 'RE-2026-0001';"
+# analog für ein Angebot: UPDATE quotes SET locked_by = NULL, ... WHERE number = 'AN-...'
+# oder einen Lieferschein: UPDATE delivery_notes SET locked_by = NULL, ... WHERE number = 'LS-...'
 ```
 
 ### 500 „Interner Serverfehler"

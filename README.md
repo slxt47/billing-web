@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (211 Backend- + 73 Frontend-Tests) with CI are
+and an automated test suite (249 Backend- + 95 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -82,6 +82,10 @@ code and `TODO.md` first.
   gelöscht, ist die Umwandlung wieder möglich.
 - Angebote, Rechnungen und Lieferscheine teilen sich **eine fortlaufende
   Belegnummer pro Jahr**, damit eine Umwandlung die Nummer sauber weiterschiebt.
+- **Bearbeitungssperre** — wie bei Rechnungen: solange jemand ein Angebot oder
+  einen Lieferschein bearbeitet, ist es für andere Benutzer gesperrt (läuft
+  nach 5 Minuten Inaktivität automatisch ab); ein zweiter Versuch bricht mit
+  Hinweis ab, statt das Formular zu füllen.
 
 ### Gutschriften
 - **Gutschriften (Credit Notes)** — eigene Belegart (`GS-<Jahr>-0001`) mit
@@ -108,6 +112,13 @@ code and `TODO.md` first.
   sowie Aufstellungen je Monat und je Kunde.
 - **CSV-Export** — beide Auswertungen als CSV (Semikolon, deutsche
   Dezimalkommas, BOM für Excel).
+- **Freier Report-Builder** — Belegart frei wählbar (Rechnungen, Angebote,
+  Lieferscheine, Gutschriften), derselbe Zeitraum wie oben, optionaler
+  Statusfilter, Gruppierung nach nichts (Belegliste), Kunde, Monat oder
+  Status, ebenfalls mit CSV-Export. Anders als UStVA und Erlöse blendet er
+  nichts von sich aus aus — auch stornierte Belege zählen mit, sofern nicht
+  über den Statusfilter ausgeschlossen. Lieferscheine kennen keine Preise,
+  dort stehen nur Anzahl und Positionen.
 - ⚠️ **Nur die Erlösseite** — Ausgaben erfasst die App nicht, eine
   vollständige Gewinn-und-Verlust-Rechnung ist damit nicht möglich. Aus
   demselben Grund weist die UStVA-Auswertung keine Vorsteuer aus.
@@ -133,6 +144,13 @@ code and `TODO.md` first.
   „📄 Beispieldatei herunterladen“: der Knopf fragt in einem kleinen Fenster
   nach dem Format und liefert dann `kunden-vorlage.csv` oder
   `kunden-vorlage.json`.
+- **Artikel-Import (CSV oder JSON)** — dasselbe Prinzip im Reiter „Artikel“,
+  nur mit den zwei Feldern, die ein Artikel hat (Bezeichnung, Standardpreis).
+  Eine vorhandene Bezeichnung wird im Preis aktualisiert statt doppelt
+  angelegt.
+- **CSV-Massenexport** — „⬇️ Alle als CSV“ bei Kunden **und** Artikeln lädt
+  die komplette Liste als CSV, in denselben Spalten wie der Import — eine
+  exportierte Datei lässt sich also ohne Nacharbeit wieder einlesen.
 - **Kundensuche mit Vorauswahl** — wer im Beleg-Formular nach einem Kunden
   sucht, bekommt den besten Treffer sofort ausgewählt und die Stammdaten
   übernommen; eine bereits getroffene Auswahl bleibt dabei stehen.
@@ -193,6 +211,14 @@ code and `TODO.md` first.
   Sperrfrist stehen in `.env` (`ALERT_*`); standardmäßig sind die Mails aus
   (`ALERTS_ENABLED=false`), `scripts/setup-prod.sh` schaltet sie ein. Ein
   Probealarm lässt sich in der Monitoring-Ansicht auslösen.
+- **Response-Cache** — Dashboard-Kennzahlen und alle drei Auswertungen (UStVA,
+  Erlöse, freier Report-Builder) kommen für `CACHE_TTL_SECONDS` (Standard
+  30 s) aus dem Prozessspeicher statt bei jedem Klick neu aus der Datenbank
+  berechnet zu werden (Antwort-Header `X-Cache: HIT`/`MISS`). Beleg- und
+  Stammdatenlisten bleiben ungecacht, weil dort mehrere Benutzer live
+  zusammenarbeiten. Ein schreibender Zugriff auf Rechnungen, Gutschriften oder
+  eine Backup-Wiederherstellung leert den Cache; abschaltbar über
+  `CACHE_ENABLED=false`.
 - **Automatische Backups** — täglicher `pg_dump` (gzip) in `./backups`, hält die
   letzten 14 Sicherungen.
 - **Backup-Verwaltung im Admin-Bereich** — vorhandene Backups auflisten,
@@ -218,8 +244,9 @@ code and `TODO.md` first.
 - **Live-Anzeige „jemand ist auch hier"** — hat ein Kollege denselben Beleg
   offen, steht das als Hinweis über dem Formular; in den Listen markiert ein
   👀 die Belege, an denen gerade jemand sitzt. Ergänzt die Bearbeitungssperre
-  (die nur das gleichzeitige Speichern verhindert) und gilt auch für Angebote
-  und Lieferscheine, die gar keine Sperre haben.
+  um eine Rückmeldung schon *während* des Tippens, nicht erst beim
+  Speichern; gilt wie die Sperre selbst für Rechnungen, Angebote UND
+  Lieferscheine.
 - **Entwurfs-Speicher** — begonnene Rechnungen, Angebote und Lieferscheine
   überleben ein Neuladen der Seite: der Entwurf liegt lokal im Browser
   (localStorage, 7 Tage) und wird beim Öffnen wieder eingesetzt. Es geht nichts
@@ -245,7 +272,7 @@ code and `TODO.md` first.
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
 | Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
 | Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
-| Tests / CI | pytest (211 Backend-Tests) + jsdom (73 Frontend-Tests), GitHub Actions |
+| Tests / CI | pytest (249 Backend-Tests) + jsdom (95 Frontend-Tests), GitHub Actions |
 
 ## Starten
 
@@ -385,6 +412,9 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/quotes` | Liste |
 | `POST`  | `/api/quotes` | Angebot anlegen |
 | `GET`   | `/api/quotes/{id}` | Einzelnes Angebot |
+| `GET`   | `/api/quotes/{id}/lock` | Bearbeitungssperre abfragen |
+| `POST`  | `/api/quotes/{id}/lock` | Bearbeitungssperre setzen/erneuern |
+| `DELETE`| `/api/quotes/{id}/lock` | Bearbeitungssperre freigeben |
 | `PUT`   | `/api/quotes/{id}` | Angebot bearbeiten |
 | `PATCH` | `/api/quotes/{id}/status` | Status setzen |
 | `DELETE`| `/api/quotes/{id}` | Löschen |
@@ -412,6 +442,8 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/reports/vat.csv?from=&to=` | dieselbe Auswertung als CSV |
 | `GET`   | `/api/reports/revenue?from=&to=` | Erlöse je Monat und Kunde |
 | `GET`   | `/api/reports/revenue.csv?from=&to=` | dieselbe Auswertung als CSV |
+| `GET`   | `/api/reports/custom?doc_type=&from=&to=&group_by=&status=` | Freier Report-Builder: Belegart (invoice/quote/delivery_note/credit_note), Zeitraum, optionaler Statusfilter, Gruppierung (none/customer/month/status) |
+| `GET`   | `/api/reports/custom.csv?...` | dieselbe Auswertung als CSV |
 
 ### PDF-Vorlagen
 | Methode | Pfad | Zweck |
@@ -436,6 +468,9 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/delivery-notes` | Liste |
 | `POST`  | `/api/delivery-notes` | Lieferschein anlegen |
 | `GET`   | `/api/delivery-notes/{id}` | Einzelner Lieferschein |
+| `GET`   | `/api/delivery-notes/{id}/lock` | Bearbeitungssperre abfragen |
+| `POST`  | `/api/delivery-notes/{id}/lock` | Bearbeitungssperre setzen/erneuern |
+| `DELETE`| `/api/delivery-notes/{id}/lock` | Bearbeitungssperre freigeben |
 | `PUT`   | `/api/delivery-notes/{id}` | Bearbeiten |
 | `PATCH` | `/api/delivery-notes/{id}/status` | Status setzen (offen/abgeschlossen/storniert) |
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
@@ -449,7 +484,8 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/stats` | Dashboard-Kennzahlen |
 | `GET`   | `/api/customers?active_only=` | Stammkunden auflisten |
 | `POST`  | `/api/customers` | Stammkunde anlegen |
-| `POST`  | `/api/customers/import` | Kunden aus CSV importieren (multipart, Feld `file`) |
+| `POST`  | `/api/customers/import` | Kunden aus CSV/JSON importieren (multipart, Feld `file`) |
+| `GET`   | `/api/customers/export.csv` | Alle Kunden als CSV (Gegenstück zum Import) |
 | `PUT`   | `/api/customers/{id}` | Stammkunde bearbeiten |
 | `PATCH` | `/api/customers/{id}/active` | Aktiv/inaktiv setzen |
 | `DELETE`| `/api/customers/{id}` | Stammkunde löschen |
@@ -457,6 +493,8 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `POST`  | `/api/customers/{id}/anonymize` | DSGVO Art. 17 Anonymisierung (nur Admin) |
 | `GET`   | `/api/products?active_only=` | Artikel/Leistungen auflisten |
 | `POST`  | `/api/products` | Artikel/Leistung anlegen |
+| `POST`  | `/api/products/import` | Artikel aus CSV/JSON importieren (multipart, Feld `file`) |
+| `GET`   | `/api/products/export.csv` | Alle Artikel als CSV (Gegenstück zum Import) |
 | `PUT`   | `/api/products/{id}` | Artikel/Leistung bearbeiten |
 | `PATCH` | `/api/products/{id}/active` | Aktiv/inaktiv setzen |
 | `DELETE`| `/api/products/{id}` | Artikel/Leistung löschen |

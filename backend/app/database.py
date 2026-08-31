@@ -67,6 +67,10 @@ _MIGRATIONS = [
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS source_delivery_note_id INTEGER",
     "ALTER TABLE pdf_templates ADD COLUMN IF NOT EXISTS layout VARCHAR(20) "
     "NOT NULL DEFAULT 'standard'",
+    "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS locked_by VARCHAR(80)",
+    "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP",
+    "ALTER TABLE delivery_notes ADD COLUMN IF NOT EXISTS locked_by VARCHAR(80)",
+    "ALTER TABLE delivery_notes ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP",
 ]
 
 

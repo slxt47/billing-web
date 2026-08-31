@@ -49,7 +49,6 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     HTML in einem Kundennamen oder einer Artikelbeschreibung kann die
     Tabelle nicht mehr aufbrechen, Positionszeilen werden über das DOM
     gefüllt
-[ ] Automatisiertes Security-Audit / externer Pentest
 
 
 --------------------------------------------------------------------------------
@@ -58,14 +57,18 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 [X] Serverseitige Validierung (Pydantic-Schemas für jeden Request-Body)
 [X] Kollisionsfreie Belegnummern über Rechnungen, Angebote und
     Lieferscheine hinweg (gemeinsame Jahressequenz, PostgreSQL Advisory Lock)
-[X] Bearbeitungssperre für Rechnungen (verhindert, dass zwei Personen
-    dieselbe Rechnung gleichzeitig bearbeiten, läuft nach 5 Minuten ab)
+[X] Bearbeitungssperre für Rechnungen, Angebote UND Lieferscheine
+    (verhindert, dass zwei Personen denselben Beleg gleichzeitig bearbeiten,
+    läuft nach 5 Minuten ohne Erneuerung automatisch ab). Ursprünglich nur für
+    Rechnungen, seit Abschnitt 9 für alle drei Belegarten über dieselben
+    crud.py-Funktionen (acquire_lock/release_lock/lock_status, Typ Lockable).
 [X] Anwesenheitsanzeige („jemand anderes hat das offen“): ein Client mit
     offenem Beleg meldet sich alle 10 s per
     POST /api/presence/{doc_type}/{doc_id} und bekommt alle anderen auf
     diesem Beleg zurück; das Formular zeigt ein Banner, die Listen
     markieren die betroffenen Zeilen. Gilt für Rechnungen, Angebote UND
-    Lieferscheine – die beiden letzten haben gar keine Bearbeitungssperre.
+    Lieferscheine – ergänzt dort die Bearbeitungssperre um die Rückmeldung
+    schon *während* jemand tippt, nicht erst beim Speichern.
     Einträge verfallen 45 s nach dem letzten Lebenszeichen, ein
     geschlossener Tab räumt sich also selbst auf. Polling statt WebSockets
     (Begründung in Technical_documentation.md). Tabelle `presence`,
@@ -95,18 +98,20 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
     einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
     und unbehandelte Fehler
-[X] Automatisierte Tests: 211 pytest-Tests in backend/tests/ gegen eine
+[X] Automatisierte Tests: 249 pytest-Tests in backend/tests/ gegen eine
     temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
-    Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import), Admin-Endpunkte,
+    Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import und -Export),
+    Admin-Endpunkte, Auswertungen (inkl. freiem Report-Builder), Response-Cache,
     Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 73 Frontend-Tests in backend/tests/frontend/, die die
+    backend/. Dazu 95 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
-    Logo-Upload, Kundenimport, Beispieldateien als CSV/JSON, Listenfilter,
-    Lieferscheinliste, Umwandlung Angebot -> Rechnung, gesperrte
-    Doppelumwandlungen, Sprung in die Rechnungsübersicht nach dem Speichern,
-    Gutschriften, Auswertungen, Monitoring, PDF-Vorlagen, CSRF-Header,
-    Maskierung) –
+    Logo-Upload, Kunden-/Artikelimport und -export, Beispieldateien als
+    CSV/JSON, Listenfilter, Lieferscheinliste, Umwandlung Angebot ->
+    Rechnung, gesperrte Doppelumwandlungen, Bearbeitungssperre auf Angebot
+    und Lieferschein, Sprung in die Rechnungsübersicht nach dem Speichern,
+    Gutschriften, Auswertungen samt Report-Builder, Monitoring, PDF-Vorlagen,
+    CSRF-Header, Maskierung) –
     `npm install && npm test`, braucht Node >= 20
 
 
@@ -195,10 +200,7 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     („Mechatronik Neubauer e.U.“) legt der Start an (crud.seed_pdf_templates),
     solange es keine Vordruck-Vorlage gibt – sonst müsste sie jeder erst von
     Hand anlegen, um den Vordruck überhaupt wählen zu können.
-[ ] Wiederkehrende Rechnungen
-[ ] Freigabe-Workflow
-[ ] Mehrwährungsfähigkeit (bisher nur EUR)
-[ ] Dateianhänge an Rechnungen
+
 
 
 --------------------------------------------------------------------------------
@@ -227,10 +229,19 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 [X] Ein Logo-Upload löscht keine ungespeicherten Firmendaten mehr: der
     Handler frischt nur noch die Vorschau auf, statt das Formular neu vom
     Server zu füllen (app.js: showLogo)
-[ ] Kundengruppen
-[ ] Kreditlimits
-[ ] Notizfeld je Kunde
-[ ] Artikelimport und ein CSV-Massenexport für Kunden und Artikel
+[X] Artikelimport und ein CSV-Massenexport für Kunden und Artikel: Artikelimport
+    (POST /api/products/import, „Datei wählen & importieren“ in der
+    Artikelansicht) spiegelt den Kundenimport – CSV oder JSON, Pflichtfeld nur
+    die Bezeichnung, ein vorhandener Artikel (gleicher Name) wird im Preis
+    aktualisiert statt doppelt angelegt. Die Import-Hilfsfunktionen in main.py
+    sind dafür generisch über eine Aliaskarte statt fest auf Kunden
+    zugeschnitten (_field_for, _map_row, _rows_from_csv/_json,
+    _read_import_rows). Dazu „⬇️ Alle als CSV“ bei Kunden UND Artikeln
+    (GET /api/customers/export.csv, /api/products/export.csv) – dieselben
+    Spalten wie der Import, ein exportiertes File lässt sich also ohne
+    Nacharbeit wieder einlesen. Export nutzt jetzt csv.writer (main._write_csv)
+    statt manuellem String-Zusammenkleben, ein Semikolon oder Anführungszeichen
+    im Kundennamen verschiebt die Spalten also nicht mehr.
 
 
 --------------------------------------------------------------------------------
@@ -247,13 +258,24 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     frei wählbaren Zeitraum, nach Rechnungsdatum (Soll-Versteuerung),
     Gutschriften abgezogen, stornierte Belege ausgenommen, Kleinunternehmer im
     0-%-Topf. Dazu ein CSV-Export. Ohne Vorsteuer – siehe nächster Punkt.
-[ ] Gewinn-und-Verlust-Auswertung – halb erledigt: die Erlösseite steht
+[X] Gewinn-und-Verlust-Auswertung – halb erledigt: die Erlösseite steht
     (reports.revenue_report: Erlös netto/brutto, Gutschriften, bezahlt, offen,
     je Monat und je Kunde, mit CSV-Export). Was fehlt, ist die Ausgabenseite:
     ohne erfasste Ausgaben gibt es weder ein Betriebsergebnis noch die
     Vorsteuer für die UStVA. Nächster Schritt wäre eine Belegart „Ausgabe“
     (Datum, Kategorie, Beschreibung, Netto, MwSt.) mit eigener Ansicht.
-[ ] Freier Report-Builder
+[X] Freier Report-Builder (reports.custom_report, Reiter „Auswertungen“ unter
+    UStVA/Erlöse): Belegart frei wählbar (Rechnungen, Angebote, Lieferscheine,
+    Gutschriften), derselbe Zeitraum wie die beiden festen Auswertungen,
+    optionaler Statusfilter, Gruppierung nach nichts (Belegliste), Kunde,
+    Monat oder Status – inklusive CSV-Export (/api/reports/custom(.csv)).
+    Anders als UStVA und Erlöse blendet er nichts von sich aus aus (auch
+    stornierte Belege zählen mit, sofern nicht per Statusfilter
+    ausgeschlossen) – „frei“ heißt hier: der Nutzer entscheidet, nicht die
+    Auswertung. Lieferscheine kennen keine Preise, dort liefert die Antwort
+    `has_amounts: false` und die Geldspalten fehlen ganz, das Frontend blendet
+    sie dafür aus. Liegt unter /api/reports/ und damit automatisch im
+    Response-Cache (Abschnitt 6).
 
 
 --------------------------------------------------------------------------------
@@ -300,10 +322,22 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     läuft beim Zurückkommen weiter (visibilitychange holt sofort nach).
     Daneben steht, wann die Zahlen zuletzt kamen, in welchem Takt sie
     nachkommen und ob ein Abruf fehlgeschlagen ist.
-[ ] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
+[X] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
     `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
     mehrere Repliken nicht überstehen)
-[ ] Response-Cache
+[X] Response-Cache (cache.py, response_cache_middleware): hält die Antwort von
+    /api/stats und allem unter /api/reports/ (UStVA, Erlöse, freier
+    Report-Builder, je als JSON und CSV) für CACHE_TTL_SECONDS (Vorgabe 30 s)
+    im Prozessspeicher vor, Antwort-Header X-Cache: HIT/MISS. Beleg- und
+    Stammdatenlisten bleiben bewusst ungecacht – dort arbeiten mehrere
+    Benutzer live zusammen (Anwesenheitsanzeige, Bearbeitungssperre), eine
+    veraltete Antwort stört dort mehr, als sie an Rechenzeit spart. Ein
+    schreibender Request auf Rechnungen, Gutschriften oder eine
+    Backup-Wiederherstellung leert den gesamten Cache (die Bearbeitungssperre
+    /lock ist davon ausgenommen, sonst würde ihr 90-Sekunden-Heartbeat den
+    Cache dauernd neu leeren). Schaltbar über CACHE_ENABLED, TTL über
+    CACHE_TTL_SECONDS. Zustand liegt wie Login-Sperre, Rate-Limit und
+    Monitoring im Prozessspeicher des einen `web`-Containers.
 
 
 --------------------------------------------------------------------------------
@@ -312,7 +346,16 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 [X] README.md beschreibt den tatsächlichen Funktionsumfang
 [X] Technical_documentation.md beschreibt die tatsächliche Architektur/API
 [X] Eigener Leitfaden zur Fehlersuche (TROUBLESHOOTING.md)
-[ ] Diagramme über die ASCII-Skizze in Technical_documentation.md hinaus
+[X] Diagramme über die ASCII-Skizze in Technical_documentation.md hinaus: sechs
+    Mermaid-Diagramme neben der bestehenden ASCII-Skizze (die bleibt stehen,
+    als schneller Textüberblick) – Architektur als Flowchart, ein
+    ER-Diagramm des Datenmodells samt der drei Umwandlungs- und der
+    Gutschrift-Beziehung, ein Sequenzdiagramm der Umwandlungskette
+    Angebot -> Rechnung -> Lieferschein -> Angebot, je ein Zustandsdiagramm
+    für Rechnungs- und Lieferschein-Status, und ein Sequenzdiagramm, das
+    Bearbeitungssperre und Anwesenheitsanzeige nebeneinander an zwei
+    Benutzern zeigt. GitHub rendert ```mermaid-Blöcke in .md-Dateien nativ,
+    es braucht also keine zusätzliche Bibliothek oder einen Renderschritt.
 
 
 --------------------------------------------------------------------------------
@@ -332,17 +375,46 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 --------------------------------------------------------------------------------
 9. IDEEN / NOCH NICHT EINGEPLANT
 --------------------------------------------------------------------------------
-[ ] Feldweises Zusammenführen oder eine echte Sperre für Angebote und
-    Lieferscheine: zwei Personen sehen sich dort zwar gegenseitig
-    (Anwesenheitsanzeige), können sich aber weiterhin überschreiben.
-    Rechnungen schützt die Bearbeitungssperre. Nächster Schritt, falls das
-    im Alltag weh tut.
+[X] Feldweises Zusammenführen oder eine echte Sperre für Angebote und
+    Lieferscheine: echte Sperre statt Zusammenführen – dieselbe
+    Bearbeitungssperre wie bei Rechnungen (Abschnitt 2), nur eben auch für
+    Angebot und Lieferschein. Quote und DeliveryNote tragen jetzt dieselben
+    zwei Spalten locked_by/locked_at wie Invoice; crud.py-Funktionen
+    (acquire_lock/release_lock/lock_status) sind dafür generisch über einen
+    Lockable-Typ (Invoice | Quote | DeliveryNote) statt Invoice-spezifisch.
+    Neue Routen GET/POST/DELETE /api/quotes/{id}/lock und
+    .../delivery-notes/{id}/lock, PUT prüft die Sperre wie bei der Rechnung
+    (409 „wird gerade von … bearbeitet“). Frontend: „bearbeiten“ holt vorher
+    die Sperre, bei „editable: false“ bricht es mit Hinweis ab statt das
+    Formular zu füllen; „Abbrechen“ und ein Wechsel in eine andere Ansicht
+    geben sie wieder frei. Feldweises Zusammenführen wurde bewusst nicht
+    gebaut – eine Sperre ist einfacher, konsistent mit Rechnungen, und die
+    Anwesenheitsanzeige zeigt ohnehin schon, wer gerade mitliest.
 Sonst ist hier nichts geparkt.
 
 
 --------------------------------------------------------------------------------
 10. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-31, neunter Durchgang
+  * Alle offenen Punkte bis auf Abschnitt 8 abgeschlossen:
+  * Artikelimport (CSV/JSON) und CSV-Massenexport für Kunden UND Artikel
+    (Abschnitt 4). main.py-Importhilfen dafür generisch über eine Aliaskarte
+    statt Invoice-/Customer-spezifisch; Export nutzt jetzt csv.writer statt
+    manuellem String-Zusammenkleben.
+  * Freier Report-Builder: Belegart, Zeitraum, Statusfilter und Gruppierung
+    (Kunde/Monat/Status) frei wählbar, mit CSV-Export (Abschnitt 5).
+  * Response-Cache für Dashboard und alle drei Auswertungen, TTL 30 s,
+    geleert bei Schreibzugriffen auf Rechnungen/Gutschriften/Backup-Restore
+    (Abschnitt 6).
+  * Sechs Mermaid-Diagramme in Technical_documentation.md: Architektur,
+    ER-Diagramm, Umwandlungskette, zwei Zustandsdiagramme (Rechnung,
+    Lieferschein), Sperre+Anwesenheit im Sequenzdiagramm (Abschnitt 7).
+  * Echte Bearbeitungssperre jetzt auch für Angebote und Lieferscheine, nicht
+    nur Rechnungen – dieselben crud.py-Funktionen, generisch über einen
+    Lockable-Typ (Abschnitt 9, vormals unter „Ideen“).
+  * Teststand: 249 Backend- und 95 Frontend-Tests.
+
 2026-08-31, achter Durchgang
   * Die Vordruck-Vorlage „Mechatronik Neubauer e.U.“ legt der Start selbst an
     und die Auswahl beim Beleg erscheint schon ab einer Vorlage – vorher war

@@ -1,13 +1,20 @@
-"""Auswertungen: Umsatzsteuer-Voranmeldung (UStVA) und Erlösrechnung.
+"""Auswertungen: Umsatzsteuer-Voranmeldung (UStVA), Erlösrechnung und der
+freie Report-Builder.
 
-Beides rechnet auf denselben Grundlagen: Rechnungen mit Belegdatum im
-Zeitraum (ohne stornierte) minus Gutschriften mit Belegdatum im Zeitraum
-(ohne stornierte). Gerechnet wird nach Soll-Versteuerung, also nach
+UStVA und Erlösrechnung rechnen auf denselben Grundlagen: Rechnungen mit
+Belegdatum im Zeitraum (ohne stornierte) minus Gutschriften mit Belegdatum im
+Zeitraum (ohne stornierte). Gerechnet wird nach Soll-Versteuerung, also nach
 Rechnungsdatum und nicht nach Zahlungseingang.
 
 Die Erlösrechnung ist bewusst nur die Einnahmenseite: Ausgaben erfasst die
 App nicht, eine vollständige Gewinn-und-Verlust-Rechnung ist damit nicht
 möglich (siehe TODO.md).
+
+Der freie Report-Builder (ab DOC_TYPES weiter unten) ist die dritte, offene
+Auswertung: eine beliebige der vier Belegarten, ein Zeitraum, ein optionaler
+Statusfilter, gruppiert nach nichts/Kunde/Monat/Status. Anders als die beiden
+festen Reports blendet er nichts von sich aus aus (auch stornierte Belege
+zählen mit, sofern nicht per Statusfilter ausgeschlossen).
 """
 from calendar import monthrange
 from datetime import date
@@ -184,6 +191,130 @@ def vat_report_csv(report: dict) -> str:
     rows.append([])
     rows.append(["Hinweis", "Vorsteuer ist nicht enthalten: Ausgaben werden "
                             "in dieser App nicht erfasst."])
+    return _csv(rows)
+
+
+# --------------------------- Freier Report-Builder ------------------------
+# Anders als UStVA und Erlösrechnung oben (die feste, steuerlich begründete
+# Regeln haben: ohne stornierte Belege, Soll-Versteuerung) blendet der freie
+# Report-Builder nichts von sich aus aus – wer stornierte Belege sehen will,
+# lässt den Statusfilter einfach leer. Er deckt alle vier Belegarten ab statt
+# nur Rechnung/Gutschrift; Lieferscheine kennen keine Preise, deshalb ist
+# has_amounts dort False und die Geldspalten fehlen ganz.
+DOC_TYPES = ("invoice", "quote", "delivery_note", "credit_note")
+GROUP_BY_OPTIONS = ("none", "customer", "month", "status")
+
+_DOC_MODELS = {
+    "invoice": models.Invoice,
+    "quote": models.Quote,
+    "delivery_note": models.DeliveryNote,
+    "credit_note": models.CreditNote,
+}
+_HAS_AMOUNTS = {"invoice": True, "quote": True, "delivery_note": False, "credit_note": True}
+
+
+def _custom_report_rows(db: Session, doc_type: str, start: date, end: date,
+                        status: str | None):
+    model = _DOC_MODELS[doc_type]
+    q = (db.query(model)
+         .filter(model.issue_date >= start)
+         .filter(model.issue_date <= end))
+    if status:
+        q = q.filter(model.status == status)
+    return q.order_by(model.issue_date.asc()).all()
+
+
+def custom_report(db: Session, doc_type: str, start: date, end: date,
+                  group_by: str = "none", status: str | None = None) -> dict:
+    """Freier Report-Builder: eine Belegart, ein Zeitraum, ein optionaler
+    Statusfilter, gruppiert nach nichts (Belegliste), Kunde, Monat oder
+    Status. `doc_type` und `group_by` sind vom Aufrufer bereits gegen
+    DOC_TYPES/GROUP_BY_OPTIONS geprüft (main.py)."""
+    docs = _custom_report_rows(db, doc_type, start, end, status)
+    has_amounts = _HAS_AMOUNTS[doc_type]
+
+    def row_of(doc) -> dict:
+        row = {
+            "number": doc.number, "customer_name": doc.customer_name,
+            "issue_date": doc.issue_date.isoformat(), "status": doc.status,
+            "item_count": len(doc.items),
+        }
+        if has_amounts:
+            row.update(net=round(doc.net, 2), tax=round(doc.tax_amount, 2),
+                      gross=round(doc.total, 2))
+        return row
+
+    if group_by == "none":
+        rows = [row_of(doc) for doc in docs]
+    else:
+        def key_of(doc) -> str:
+            if group_by == "customer":
+                return doc.customer_name
+            if group_by == "month":
+                return f"{doc.issue_date.year}-{doc.issue_date.month:02d}"
+            return doc.status  # "status"
+
+        buckets: dict[str, dict] = {}
+        for doc in docs:
+            b = buckets.setdefault(key_of(doc), {
+                "group": key_of(doc), "count": 0, "item_count": 0,
+                "net": 0.0, "tax": 0.0, "gross": 0.0,
+            })
+            b["count"] += 1
+            b["item_count"] += len(doc.items)
+            if has_amounts:
+                b["net"] += doc.net
+                b["tax"] += doc.tax_amount
+                b["gross"] += doc.total
+        rows = sorted(
+            ({**b, "net": round(b["net"], 2), "tax": round(b["tax"], 2),
+              "gross": round(b["gross"], 2)} for b in buckets.values()),
+            key=lambda r: r["group"],
+        )
+
+    return {
+        "doc_type": doc_type, "group_by": group_by, "status": status,
+        "from": start.isoformat(), "to": end.isoformat(),
+        "has_amounts": has_amounts,
+        "rows": rows,
+        "totals": {
+            "count": len(docs),
+            "item_count": sum(len(doc.items) for doc in docs),
+            "net": round(sum(doc.net for doc in docs), 2) if has_amounts else None,
+            "tax": round(sum(doc.tax_amount for doc in docs), 2) if has_amounts else None,
+            "gross": round(sum(doc.total for doc in docs), 2) if has_amounts else None,
+        },
+    }
+
+
+def custom_report_csv(report: dict) -> str:
+    grouped = report["group_by"] != "none"
+    rows = [["Freier Report", report["doc_type"]],
+            ["Zeitraum", f"{report['from']} bis {report['to']}"]]
+    if report["status"]:
+        rows.append(["Status-Filter", report["status"]])
+    rows.append([])
+
+    header = (["Gruppe", "Anzahl", "Positionen"] if grouped
+              else ["Nummer", "Kunde", "Datum", "Status", "Positionen"])
+    if report["has_amounts"]:
+        header += ["Netto", "Steuer", "Brutto"]
+    rows.append(header)
+
+    for r in report["rows"]:
+        row = ([r["group"], r["count"], r["item_count"]] if grouped
+               else [r["number"], r["customer_name"], r["issue_date"], r["status"],
+                     r["item_count"]])
+        if report["has_amounts"]:
+            row += [r["net"], r["tax"], r["gross"]]
+        rows.append(row)
+
+    t = report["totals"]
+    total_row = ["Summe", t["count"], t["item_count"]]
+    if report["has_amounts"]:
+        total_row += [t["net"], t["tax"], t["gross"]]
+    rows.append([])
+    rows.append(total_row)
     return _csv(rows)
 
 

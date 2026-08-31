@@ -308,3 +308,114 @@ def test_product_search(user_client):
 def test_product_price_must_not_be_negative(user_client):
     assert user_client.post("/api/products",
                             json={"name": "X", "unit_price": -1}).status_code == 422
+
+
+# --------------------------- Massenexport (CSV) ----------------------------
+def test_export_customers_csv_round_trips_through_import(user_client):
+    user_client.post("/api/customers", json=CUSTOMER)
+    user_client.post("/api/customers", json={**CUSTOMER, "name": "Zweite GmbH",
+                                              "email": "", "skonto_percent": 0,
+                                              "skonto_days": 0})
+    exported = user_client.get("/api/customers/export.csv")
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("text/csv")
+    text = exported.content.decode("utf-8-sig")
+    assert "Stamm GmbH" in text and "Zweite GmbH" in text
+    assert "Status" in text.splitlines()[0]
+
+    for c in user_client.get("/api/customers").json():
+        user_client.delete(f"/api/customers/{c['id']}")
+    assert user_client.get("/api/customers").json() == []
+
+    result = user_client.post(
+        "/api/customers/import",
+        files={"file": ("export.csv", exported.content, "text/csv")}).json()
+    assert (result["created"], result["updated"]) == (2, 0)
+    names = {c["name"] for c in user_client.get("/api/customers").json()}
+    assert names == {"Stamm GmbH", "Zweite GmbH"}
+
+
+def test_export_customers_csv_escapes_special_characters(user_client):
+    """Ein Semikolon im Namen darf die Spalten nicht verschieben (echtes
+    CSV-Quoting statt manuellem Zusammenkleben)."""
+    user_client.post("/api/customers", json={**CUSTOMER, "name": "A; B GmbH",
+                                              "contact_person": 'Herr "Chef"'})
+    exported = user_client.get("/api/customers/export.csv")
+    row = exported.content.decode("utf-8-sig").splitlines()[1]
+    assert row.startswith('"A; B GmbH"')
+
+
+def test_export_products_csv(user_client):
+    user_client.post("/api/products", json={"name": "Schraube", "unit_price": 1.5})
+    exported = user_client.get("/api/products/export.csv")
+    assert exported.status_code == 200
+    text = exported.content.decode("utf-8-sig")
+    assert "Schraube" in text
+    assert "1.5" in text or "1,5" in text
+
+
+# --------------------------- Artikelimport ---------------------------------
+def test_import_creates_and_updates_products(user_client):
+    user_client.post("/api/products", json={"name": "Stundensatz", "unit_price": 80})
+    csv_content = ("Name;Standardpreis\r\n"
+                   "Stundensatz;95\r\n"
+                   "Anfahrt;25,5\r\n")
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel.csv", csv_content.encode(), "text/csv")}).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (1, 1, 0)
+
+    products = {p["name"]: p for p in user_client.get("/api/products").json()}
+    assert products["Stundensatz"]["unit_price"] == 95.0
+    assert products["Anfahrt"]["unit_price"] == 25.5
+
+
+def test_import_products_accepts_json_and_english_headers(user_client):
+    payload = [{"product_name": "Beratung", "price": "120"}]
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel.json", json.dumps(payload).encode(),
+                        "application/json")}).json()
+    assert result["created"] == 1
+    assert user_client.get("/api/products").json()[0]["unit_price"] == 120.0
+
+
+def test_import_products_without_name_column_is_rejected(user_client):
+    response = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel.csv", b"spalte1;spalte2\na;b\n", "text/csv")})
+    assert response.status_code == 400
+    assert "Artikelbezeichnung" in response.json()["detail"]
+
+
+def test_import_products_skips_invalid_rows(user_client):
+    csv_content = "name;preis\n;10\nGut;5\nSchlecht;minus fünf\n"
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel.csv", csv_content.encode(), "text/csv")}).json()
+    assert result["created"] == 1
+    assert result["skipped"] == 2
+    assert [p["name"] for p in user_client.get("/api/products").json()] == ["Gut"]
+
+
+def test_import_products_round_trips_through_export(user_client):
+    product = user_client.post("/api/products",
+                               json={"name": "Material", "unit_price": 42}).json()
+    exported = user_client.get("/api/products/export.csv")
+    user_client.delete(f"/api/products/{product['id']}")
+    assert user_client.get("/api/products").json() == []
+
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("export.csv", exported.content, "text/csv")}).json()
+    assert result["created"] == 1
+    assert user_client.get("/api/products").json()[0]["name"] == "Material"
+
+
+def test_product_import_is_written_to_the_audit_log(admin_client):
+    admin_client.post(
+        "/api/products/import",
+        files={"file": ("artikel.csv", b"name\nProtokoll-Artikel\n", "text/csv")})
+    entries = admin_client.get("/api/audit-log").json()
+    assert any(e["action"] == "import" and e["target_type"] == "product"
+              for e in entries)

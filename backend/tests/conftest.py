@@ -32,7 +32,7 @@ os.environ["LOG_LEVEL"] = "CRITICAL"
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import auth, security  # noqa: E402
+from app import auth, security, cache  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -47,6 +47,7 @@ def client():
     Base.metadata.create_all(engine)
     security.reset_rate_limits()
     auth._fails.clear()
+    cache.reset()
     with TestClient(app) as test_client:
         yield test_client
 

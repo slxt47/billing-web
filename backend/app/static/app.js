@@ -107,6 +107,8 @@ const views = {
 };
 function show(view) {
   if (view !== "new" && currentEditInvoiceId !== null) releaseInvoiceLock();
+  if (view !== "quotes" && currentEditQuoteId !== null) releaseQuoteLock();
+  if (view !== "delivery" && currentEditDeliveryId !== null) releaseDeliveryLock();
   // Anwesenheit gilt immer nur für die Ansicht, in der der Beleg offen ist.
   if (currentPresence && PRESENCE_VIEWS[currentPresence.type] !== view) stopPresence();
   // Das Monitoring aktualisiert sich nur, solange es auch zu sehen ist.
@@ -514,6 +516,52 @@ function releaseInvoiceLock() {
     const id = currentEditInvoiceId;
     currentEditInvoiceId = null;
     fetch(`/api/invoices/${id}/lock`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
+// ---------------------- Angebot / Lieferschein: Bearbeitungssperre --------
+// Dasselbe Prinzip wie bei der Rechnung oben, nur für die beiden Belegarten,
+// die bis vor Kurzem gar keine Sperre hatten (nur die Anwesenheitsanzeige).
+let currentEditQuoteId = null;
+let quoteLockHeartbeatTimer = null;
+let currentEditDeliveryId = null;
+let deliveryLockHeartbeatTimer = null;
+
+function startQuoteLockHeartbeat(id) {
+  stopQuoteLockHeartbeat();
+  quoteLockHeartbeatTimer = setInterval(() => {
+    fetch(`/api/quotes/${id}/lock`, { method: "POST" }).catch(() => {});
+  }, 90000);
+}
+function stopQuoteLockHeartbeat() {
+  if (quoteLockHeartbeatTimer) { clearInterval(quoteLockHeartbeatTimer); quoteLockHeartbeatTimer = null; }
+}
+function releaseQuoteLock() {
+  stopQuoteLockHeartbeat();
+  stopPresence();
+  if (currentEditQuoteId !== null) {
+    const id = currentEditQuoteId;
+    currentEditQuoteId = null;
+    fetch(`/api/quotes/${id}/lock`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
+function startDeliveryLockHeartbeat(id) {
+  stopDeliveryLockHeartbeat();
+  deliveryLockHeartbeatTimer = setInterval(() => {
+    fetch(`/api/delivery-notes/${id}/lock`, { method: "POST" }).catch(() => {});
+  }, 90000);
+}
+function stopDeliveryLockHeartbeat() {
+  if (deliveryLockHeartbeatTimer) { clearInterval(deliveryLockHeartbeatTimer); deliveryLockHeartbeatTimer = null; }
+}
+function releaseDeliveryLock() {
+  stopDeliveryLockHeartbeat();
+  stopPresence();
+  if (currentEditDeliveryId !== null) {
+    const id = currentEditDeliveryId;
+    currentEditDeliveryId = null;
+    fetch(`/api/delivery-notes/${id}/lock`, { method: "DELETE" }).catch(() => {});
   }
 }
 
@@ -1073,6 +1121,8 @@ $("#customer-import-file").addEventListener("change", async (e) => {
   loadCustomers();
 });
 
+$("#customer-export-csv").onclick = () => downloadUrl("/api/customers/export.csv", "kunden-export.csv");
+
 // ---------------------- Artikel-Verwaltung ----------------------
 async function refreshProducts() {
   productsCache = await (await fetch("/api/products")).json();
@@ -1166,6 +1216,44 @@ $("#product-form").addEventListener("submit", async (e) => {
   } else { msg.textContent = "Fehler beim Speichern."; msg.className = "err"; }
 });
 
+// ---------------------- Artikel-Import / -Export ----------------------
+// Spiegelbild des Kundenimports (siehe oben): derselbe Ablauf, nur mit den
+// zwei Feldern, die ein Artikel hat.
+function productImportMessage(text, cls) {
+  const msg = $("#product-import-msg");
+  if (!msg) return;
+  msg.textContent = text;
+  msg.className = cls ? cls : "hint";
+}
+
+$("#product-import-btn").onclick = () => $("#product-import-file").click();
+
+$("#product-import-file").addEventListener("change", async (e) => {
+  const input = e.target;
+  const file = input.files && input.files[0];
+  if (!file) return;
+
+  productImportMessage(`Import läuft … (${file.name})`);
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/api/products/import", { method: "POST", body: fd });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    productImportMessage("Import fehlgeschlagen: " + (err.detail || res.status), "err");
+    input.value = "";
+    return;
+  }
+  const r = await res.json();
+  const parts = [`✓ ${r.created} neu angelegt`, `${r.updated} aktualisiert`];
+  if (r.skipped) parts.push(`${r.skipped} übersprungen`);
+  productImportMessage(parts.join(", ") + (r.errors && r.errors.length ? ` – ${r.errors.join("; ")}` : ""),
+                       r.skipped ? "warn-text" : "ok");
+  input.value = "";
+  loadProducts();
+});
+
+$("#product-export-csv").onclick = () => downloadUrl("/api/products/export.csv", "artikel-export.csv");
+
 // ---------------------- Angebote (Quotes) ----------------------
 const quoteItemsBody = $("#quote-items-body");
 
@@ -1226,7 +1314,15 @@ function recalcQuote() {
   $(`#quote-form [name=${n}]`).addEventListener("input", recalcQuote));
 $("#quote-form [name=small_business]").addEventListener("change", recalcQuote);
 
-function startQuoteEdit(q) {
+async function startQuoteEdit(q) {
+  if (currentEditQuoteId !== null && currentEditQuoteId !== q.id) releaseQuoteLock();
+  const lock = await (await fetch(`/api/quotes/${q.id}/lock`, { method: "POST" })).json();
+  if (!lock.editable) {
+    alert(`Dieses Angebot wird gerade von "${lock.locked_by}" bearbeitet. Bitte später erneut versuchen.`);
+    return;
+  }
+  currentEditQuoteId = q.id;
+
   const f = $("#quote-form");
   clearDraft("quote");
   startPresence("quote", q.id);
@@ -1245,20 +1341,24 @@ function startQuoteEdit(q) {
   $("#quote-form-title").textContent = `Angebot ${q.number} bearbeiten`;
   $("#quote-submit").textContent = "Änderungen speichern";
   $("#quote-cancel-edit").hidden = false;
+  showBanner("#quote-lock-banner",
+    `🔒 Angebot ${q.number} ist für dich gesperrt, solange du es bearbeitest.`);
   $("#quote-msg").textContent = "";
+  startQuoteLockHeartbeat(q.id);
 }
 
 function resetQuoteForm() {
+  releaseQuoteLock();
   const f = $("#quote-form");
   f.reset();
   f.quote_id.value = "";
   quoteItemsBody.innerHTML = "";
   addQuoteItemRow();
   recalcQuote();
-  stopPresence();
   $("#quote-form-title").textContent = "Neues Angebot erstellen";
   $("#quote-submit").textContent = "Angebot speichern";
   $("#quote-cancel-edit").hidden = true;
+  hideBanner("#quote-lock-banner");
   $("#quote-msg").textContent = "";
   clearDraft("quote");
   setPendingCustomer("#quote-customer-select", "");
@@ -1433,7 +1533,15 @@ function addDeliveryItemRow(desc = "", qty = 1) {
 }
 $("#delivery-add-item").onclick = () => addDeliveryItemRow();
 
-function startDeliveryEdit(d) {
+async function startDeliveryEdit(d) {
+  if (currentEditDeliveryId !== null && currentEditDeliveryId !== d.id) releaseDeliveryLock();
+  const lock = await (await fetch(`/api/delivery-notes/${d.id}/lock`, { method: "POST" })).json();
+  if (!lock.editable) {
+    alert(`Dieser Lieferschein wird gerade von "${lock.locked_by}" bearbeitet. Bitte später erneut versuchen.`);
+    return;
+  }
+  currentEditDeliveryId = d.id;
+
   const f = $("#delivery-form");
   clearDraft("delivery");
   startPresence("delivery_note", d.id);
@@ -1447,19 +1555,23 @@ function startDeliveryEdit(d) {
   $("#delivery-form-title").textContent = `Lieferschein ${d.number} bearbeiten`;
   $("#delivery-submit").textContent = "Änderungen speichern";
   $("#delivery-cancel-edit").hidden = false;
+  showBanner("#delivery-lock-banner",
+    `🔒 Lieferschein ${d.number} ist für dich gesperrt, solange du ihn bearbeitest.`);
   $("#delivery-msg").textContent = "";
+  startDeliveryLockHeartbeat(d.id);
 }
 
 function resetDeliveryForm() {
+  releaseDeliveryLock();
   const f = $("#delivery-form");
   f.reset();
   f.delivery_id.value = "";
   deliveryItemsBody.innerHTML = "";
   addDeliveryItemRow();
-  stopPresence();
   $("#delivery-form-title").textContent = "Neuen Lieferschein erstellen";
   $("#delivery-submit").textContent = "Lieferschein speichern";
   $("#delivery-cancel-edit").hidden = true;
+  hideBanner("#delivery-lock-banner");
   $("#delivery-msg").textContent = "";
   clearDraft("delivery");
   setPendingCustomer("#delivery-customer-select", "");
@@ -1852,6 +1964,7 @@ async function loadReports() {
   ]);
   renderVatReport(vat);
   renderRevenueReport(revenue);
+  loadCustomReport();
 }
 
 function renderVatReport(report) {
@@ -1930,6 +2043,77 @@ $("#report-to").addEventListener("change", loadReports);
 $("#vat-csv").onclick = () => downloadUrl(`/api/reports/vat.csv?${reportPeriod()}`, "ustva.csv");
 $("#revenue-csv").onclick = () =>
   downloadUrl(`/api/reports/revenue.csv?${reportPeriod()}`, "erloese.csv");
+
+// ---------------------- Freier Report-Builder ----------------------
+function customReportParams() {
+  const params = new URLSearchParams(reportPeriod());
+  params.set("doc_type", $("#custom-report-doctype").value);
+  params.set("group_by", $("#custom-report-groupby").value);
+  const status = $("#custom-report-status").value.trim();
+  if (status) params.set("status", status);
+  return params.toString();
+}
+
+const CUSTOM_REPORT_GROUP_LABEL = { none: "Beleg", customer: "Kunde", month: "Monat", status: "Status" };
+
+async function loadCustomReport() {
+  const res = await fetch(`/api/reports/custom?${customReportParams()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    $("#custom-report-head").innerHTML = "";
+    $("#custom-report-body").innerHTML = "";
+    kpiTiles("#custom-report-kpis", []);
+    $("#custom-report-empty").hidden = false;
+    $("#custom-report-empty").textContent = "Fehler: " + (err.detail || res.status);
+    return;
+  }
+  renderCustomReport(await res.json());
+}
+
+function renderCustomReport(report) {
+  const grouped = report.group_by !== "none";
+  const headLabels = grouped
+    ? [CUSTOM_REPORT_GROUP_LABEL[report.group_by], "Anzahl", "Positionen"]
+    : ["Nummer", "Kunde", "Datum", "Status", "Positionen"];
+  const numericFrom = grouped ? 1 : 4;   // Spalten ab hier rechtsbündig (col-num)
+  if (report.has_amounts) headLabels.push("Netto", "Steuer", "Brutto");
+
+  $("#custom-report-head").innerHTML = headLabels
+    .map((label, i) => `<th${i >= numericFrom ? ' class="col-num"' : ""}>${esc(label)}</th>`)
+    .join("");
+
+  const body = $("#custom-report-body");
+  body.innerHTML = "";
+  for (const r of report.rows) {
+    const cells = grouped
+      ? [esc(r.group), String(r.count), String(r.item_count)]
+      : [esc(r.number), esc(r.customer_name), fmtDate(r.issue_date), esc(r.status),
+         String(r.item_count)];
+    if (report.has_amounts) cells.push(euro(r.net), euro(r.tax), euro(r.gross));
+    const tr = document.createElement("tr");
+    tr.innerHTML = cells
+      .map((c, i) => `<td${i >= numericFrom ? ' class="col-num"' : ""}>${c}</td>`)
+      .join("");
+    body.appendChild(tr);
+  }
+  $("#custom-report-empty").textContent = "Keine Belege für diese Auswahl.";
+  $("#custom-report-empty").hidden = report.rows.length > 0;
+
+  const t = report.totals;
+  const tiles = [[String(t.count), grouped ? "Belege gesamt" : "Belege"]];
+  if (report.has_amounts) {
+    tiles.push([euro(t.net), "Netto"], [euro(t.tax), "Steuer"], [euro(t.gross), "Brutto"]);
+  } else {
+    tiles.push([String(t.item_count), "Positionen gesamt"]);
+  }
+  kpiTiles("#custom-report-kpis", tiles);
+}
+
+$("#custom-report-refresh").onclick = loadCustomReport;
+$("#custom-report-doctype").addEventListener("change", loadCustomReport);
+$("#custom-report-groupby").addEventListener("change", loadCustomReport);
+$("#custom-report-csv").onclick = () =>
+  downloadUrl(`/api/reports/custom.csv?${customReportParams()}`, "report.csv");
 
 // ---------------------- Monitoring (nur Admin) ----------------------
 function fmtDuration(seconds) {

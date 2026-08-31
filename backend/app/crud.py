@@ -193,38 +193,44 @@ def update_invoice(db: Session, invoice: models.Invoice,
 
 
 # --------------------------- Bearbeitungssperre --------------------------
-def _lock_active(invoice: models.Invoice) -> bool:
+# Ursprünglich nur für Invoice, inzwischen auch für Quote und DeliveryNote:
+# alle drei Modelle tragen dieselben zwei Spalten (locked_by/locked_at), diese
+# Funktionen arbeiten rein über die Spalten und kennen den konkreten Typ nicht.
+Lockable = models.Invoice | models.Quote | models.DeliveryNote
+
+
+def _lock_active(doc: Lockable) -> bool:
     return bool(
-        invoice.locked_by and invoice.locked_at
-        and datetime.utcnow() - invoice.locked_at < LOCK_TIMEOUT
+        doc.locked_by and doc.locked_at
+        and datetime.utcnow() - doc.locked_at < LOCK_TIMEOUT
     )
 
 
-def lock_status(invoice: models.Invoice, username: str) -> dict:
-    active = _lock_active(invoice)
+def lock_status(doc: Lockable, username: str) -> dict:
+    active = _lock_active(doc)
     return {
         "locked": active,
-        "locked_by": invoice.locked_by if active else None,
-        "locked_at": invoice.locked_at if active else None,
-        "editable": (not active) or invoice.locked_by == username,
+        "locked_by": doc.locked_by if active else None,
+        "locked_at": doc.locked_at if active else None,
+        "editable": (not active) or doc.locked_by == username,
     }
 
 
-def acquire_lock(db: Session, invoice: models.Invoice, username: str) -> bool:
+def acquire_lock(db: Session, doc: Lockable, username: str) -> bool:
     """Versucht, die Bearbeitungssperre für `username` zu setzen/erneuern.
-    Gibt False zurück, wenn ein anderer Benutzer die Rechnung aktiv sperrt."""
-    if _lock_active(invoice) and invoice.locked_by != username:
+    Gibt False zurück, wenn ein anderer Benutzer den Beleg aktiv sperrt."""
+    if _lock_active(doc) and doc.locked_by != username:
         return False
-    invoice.locked_by = username
-    invoice.locked_at = datetime.utcnow()
+    doc.locked_by = username
+    doc.locked_at = datetime.utcnow()
     db.commit()
     return True
 
 
-def release_lock(db: Session, invoice: models.Invoice, username: str) -> None:
-    if invoice.locked_by == username:
-        invoice.locked_by = None
-        invoice.locked_at = None
+def release_lock(db: Session, doc: Lockable, username: str) -> None:
+    if doc.locked_by == username:
+        doc.locked_by = None
+        doc.locked_at = None
         db.commit()
 
 
@@ -510,6 +516,35 @@ def create_product(db: Session, data: schemas.ProductIn) -> models.Product:
 
 def get_product(db: Session, product_id: int) -> models.Product | None:
     return db.get(models.Product, product_id)
+
+
+def get_product_by_name(db: Session, name: str) -> models.Product | None:
+    """Artikel anhand der Bezeichnung (ohne Rücksicht auf Groß-/Kleinschreibung)
+    – die Zuordnung beim Import, der keine IDs kennt."""
+    return (db.query(models.Product)
+            .filter(func.lower(models.Product.name) == name.strip().lower())
+            .first())
+
+
+def import_products(db: Session, rows: list[schemas.ProductIn]) -> tuple[int, int]:
+    """Artikel aus einem Import übernehmen: gleiche Bezeichnung = Preis
+    aktualisieren, sonst neu anlegen. Rückgabe: (angelegt, aktualisiert).
+    Spiegelbild von import_customers."""
+    created = updated = 0
+    for data in rows:
+        existing = get_product_by_name(db, data.name)
+        if existing:
+            existing.name = data.name
+            existing.unit_price = data.unit_price
+            updated += 1
+        else:
+            db.add(models.Product(name=data.name, unit_price=data.unit_price))
+            # Ohne Flush fände eine Datei mit zweimal derselben Bezeichnung den
+            # eben angelegten Artikel nicht (die Session flusht nicht automatisch).
+            db.flush()
+            created += 1
+    db.commit()
+    return created, updated
 
 
 def update_product(db: Session, product: models.Product,

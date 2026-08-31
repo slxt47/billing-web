@@ -136,6 +136,11 @@
     <!-- ============ ANGEBOTE ============ -->
     <section id="view-quotes" hidden>
       <h2 id="quote-form-title">Neues Angebot erstellen</h2>
+      <p id="quote-lock-banner" class="warn-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#quote-lock-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
       <p id="quote-presence" class="presence-banner" hidden>
         <span class="banner-text"></span>
         <button type="button" class="banner-close" data-hide-banner="#quote-presence"
@@ -228,6 +233,11 @@
     <!-- ============ LIEFERSCHEINE ============ -->
     <section id="view-delivery" hidden>
       <h2 id="delivery-form-title">Neuen Lieferschein erstellen</h2>
+      <p id="delivery-lock-banner" class="warn-banner" hidden>
+        <span class="banner-text"></span>
+        <button type="button" class="banner-close" data-hide-banner="#delivery-lock-banner"
+                title="Hinweis ausblenden" aria-label="Hinweis ausblenden">✕</button>
+      </p>
       <p id="delivery-presence" class="presence-banner" hidden>
         <span class="banner-text"></span>
         <button type="button" class="banner-close" data-hide-banner="#delivery-presence"
@@ -475,6 +485,39 @@
         (Gewinn und Verlust) ist damit noch nicht möglich, weil die App keine
         Ausgaben kennt.</p>
       <button type="button" id="revenue-csv" class="secondary">⬇️ Erlöse als CSV</button>
+
+      <h3>Freier Report-Builder</h3>
+      <p class="hint">Belegart und Gruppierung frei wählen, derselbe Zeitraum wie
+        oben. Ohne Gruppierung kommt die Belegliste, mit Gruppierung eine Summe
+        je Kunde, Monat oder Status. Lieferscheine kennen keine Preise – dort
+        zählen nur Anzahl und Positionen. Anders als UStVA und Erlöse blendet
+        dieser Report nichts von sich aus aus, auch stornierte Belege nicht.</p>
+      <div class="bar">
+        <select id="custom-report-doctype">
+          <option value="invoice">Rechnungen</option>
+          <option value="quote">Angebote</option>
+          <option value="delivery_note">Lieferscheine</option>
+          <option value="credit_note">Gutschriften</option>
+        </select>
+        <select id="custom-report-groupby">
+          <option value="none">Keine Gruppierung (Liste)</option>
+          <option value="customer">Nach Kunde</option>
+          <option value="month">Nach Monat</option>
+          <option value="status">Nach Status</option>
+        </select>
+        <input type="text" id="custom-report-status" class="grow"
+               placeholder="Status-Filter (optional, z. B. offen)">
+        <button type="button" id="custom-report-refresh" class="secondary">🔄 Ausführen</button>
+        <button type="button" id="custom-report-csv" class="secondary">⬇️ Als CSV</button>
+      </div>
+      <div class="kpi-grid" id="custom-report-kpis"></div>
+      <div class="table-scroll">
+        <table id="custom-report-table">
+          <thead><tr id="custom-report-head"></tr></thead>
+          <tbody id="custom-report-body"></tbody>
+        </table>
+      </div>
+      <p id="custom-report-empty" hidden>Keine Belege für diese Auswahl.</p>
     </section>
 
     <!-- ============ MONITORING (nur Admin) ============ -->
@@ -581,6 +624,8 @@
           <option value="1">nur aktive</option>
           <option value="0">nur inaktive</option>
         </select>
+        <button type="button" id="customer-export-csv" class="secondary"
+                title="Alle Kunden als CSV herunterladen – lässt sich beim Import wieder einlesen">⬇️ Alle als CSV</button>
       </div>
       <div class="table-scroll">
         <table id="customers-table">
@@ -614,6 +659,18 @@
         <span id="product-msg"></span>
       </form>
 
+      <h3>Artikel importieren</h3>
+      <p class="hint">CSV oder JSON, wie beim Kundenimport. Nötig ist nur
+        <code>Name</code>; erkannt wird außerdem <code>Standardpreis</code>. Ein
+        bereits vorhandener Artikel mit derselben Bezeichnung wird im Preis
+        aktualisiert statt doppelt angelegt. Nach der Auswahl startet der
+        Import sofort.</p>
+      <div class="bar">
+        <input type="file" id="product-import-file" accept=".csv,.json,text/csv,application/json" hidden>
+        <button type="button" id="product-import-btn" class="secondary">⬆️ Datei wählen &amp; importieren</button>
+      </div>
+      <p id="product-import-msg" class="hint"></p>
+
       <h3>Gespeicherte Artikel</h3>
       <div class="bar">
         <input type="search" id="product-list-search" class="grow" placeholder="Suche nach Bezeichnung…">
@@ -622,6 +679,8 @@
           <option value="1">nur aktive</option>
           <option value="0">nur inaktive</option>
         </select>
+        <button type="button" id="product-export-csv" class="secondary"
+                title="Alle Artikel als CSV herunterladen – lässt sich beim Import wieder einlesen">⬇️ Alle als CSV</button>
       </div>
       <div class="table-scroll">
         <table id="products-table">
