@@ -1000,6 +1000,44 @@ test("Der Probealarm meldet, wohin er ging", async () => {
                /buero@muster\.example/);
 });
 
+test("Das Monitoring aktualisiert sich im gewählten Takt und stoppt beim Verlassen", async () => {
+  const { window, requests } = startApp({ routes: { "/api/admin/metrics": METRICS } });
+  await settle();
+  const calls = () => requests.filter((r) => r.url === "/api/admin/metrics").length;
+
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+  assert.equal(calls(), 1, "erst einmal beim Öffnen");
+
+  const select = window.document.querySelector("#monitoring-auto");
+  assert.equal(select.value, "0", "ohne Auswahl bleibt es beim Handbetrieb");
+  select.value = "1";
+  fire(select, "change");
+  await settle(1100);
+  assert.ok(calls() >= 2, `nach 1 s ein weiterer Abruf (waren ${calls()})`);
+
+  const before = calls();
+  window.document.querySelector("#nav-dashboard").click();
+  await settle(1100);
+  assert.equal(calls(), before, "in einer anderen Ansicht ruht der Takt");
+});
+
+test("Der gewählte Takt überlebt einen Neustart im localStorage", async () => {
+  const first = startApp({ routes: { "/api/admin/metrics": METRICS } });
+  await settle();
+  first.window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+  const select = first.window.document.querySelector("#monitoring-auto");
+  select.value = "10";
+  fire(select, "change");
+  assert.equal(first.window.localStorage.getItem("rechnung.monitoring.interval"), "10");
+
+  const second = startApp({ routes: { "/api/admin/metrics": METRICS },
+                            storage: { "rechnung.monitoring.interval": "10" } });
+  await settle();
+  assert.equal(second.window.document.querySelector("#monitoring-auto").value, "10");
+});
+
 test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async () => {
   const { window } = startApp();
   await settle();
@@ -1012,10 +1050,10 @@ test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async (
 const TEMPLATES = [
   { id: 1, name: "Standard", accent_color: "#2d6cdf", header_color: "#2d3748",
     font_family: "Helvetica", font_size: 10, header_note: "", footer_text: "",
-    show_logo: true, show_qr: true, is_default: true },
+    show_logo: true, show_qr: true, layout: "standard", is_default: true },
   { id: 2, name: "Grün", accent_color: "#2f9e44", header_color: "#1f2733",
     font_family: "Times", font_size: 11, header_note: "", footer_text: "",
-    show_logo: true, show_qr: false, is_default: false },
+    show_logo: true, show_qr: false, layout: "formular", is_default: false },
 ];
 
 test("Die Vorlagenliste steht in den Firmendaten", async () => {
@@ -1033,6 +1071,33 @@ test("Die Vorlagenliste steht in den Firmendaten", async () => {
   assert.equal(rows[0].querySelector("button[data-act=default]"), null,
                "die Vorgabe braucht den Knopf nicht");
   assert.ok(rows[1].querySelector("button[data-act=default]"));
+  assert.match(rows[0].textContent, /Standard/);
+  assert.match(rows[1].textContent, /Formular/, "das Layout steht in der Liste");
+});
+
+test("Das Layout einer Vorlage geht mit zum Server und wieder zurück ins Formular",
+     async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/pdf-templates": (o) => (o.method === "POST" ? TEMPLATES[1] : TEMPLATES) },
+  });
+  await settle();
+  window.document.querySelector("#nav-settings").click();
+  await settle(50);
+
+  const form = window.document.querySelector("#template-form");
+  assert.equal(form.layout.value, "standard", "neue Vorlagen starten im Standard");
+
+  // Bearbeiten holt das Layout der Vorlage ins Formular …
+  const rows = [...window.document.querySelectorAll("#template-body tr")];
+  rows[1].querySelector("button[data-act=edit]").click();
+  assert.equal(form.layout.value, "formular");
+
+  // … und Speichern schickt es mit.
+  form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+  await settle(50);
+  const post = requests.find((r) => r.url.startsWith("/api/pdf-templates/2")
+                                    && r.options.method === "PUT");
+  assert.equal(JSON.parse(post.options.body).layout, "formular");
 });
 
 test("Eine Vorlage lässt sich anlegen", async () => {
@@ -1055,6 +1120,7 @@ test("Eine Vorlage lässt sich anlegen", async () => {
   assert.equal(body.font_family, "Times");
   assert.equal(body.accent_color, "#2d6cdf");
   assert.equal(body.show_qr, true);
+  assert.equal(body.layout, "standard");
 });
 
 test("Ab zwei Vorlagen fragt der PDF-Download nach der Vorlage", async () => {

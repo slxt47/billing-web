@@ -399,6 +399,9 @@ class PdfTemplateIn(BaseModel):
     footer_text: str = Field("", max_length=300)
     show_logo: bool = True
     show_qr: bool = True
+    # Aussehen: "standard" oder der Vordruck "formular" (pdf.LAYOUTS prüft
+    # den Wert, genau wie bei der Schrift).
+    layout: str = Field("standard", max_length=20)
 
 
 class PdfTemplateOut(PdfTemplateIn):

@@ -65,6 +65,8 @@ _MIGRATIONS = [
     "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_contact_person VARCHAR(200) DEFAULT ''",
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS customer_contact_person VARCHAR(200) DEFAULT ''",
     "ALTER TABLE quotes ADD COLUMN IF NOT EXISTS source_delivery_note_id INTEGER",
+    "ALTER TABLE pdf_templates ADD COLUMN IF NOT EXISTS layout VARCHAR(20) "
+    "NOT NULL DEFAULT 'standard'",
 ]
 
 

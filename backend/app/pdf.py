@@ -5,6 +5,9 @@ Kopffarbe, Schrift, Schriftgröße, Kopf- und Fußtext sowie Logo/GiroCode an
 oder aus. Ohne Vorlage gelten die Werte in DEFAULTS – das ist exakt das
 Aussehen, das die App vorher fest verdrahtet hatte.
 
+Zwei Layouts stehen zur Wahl (LAYOUTS): "standard" ist das hier gebaute,
+"formular" bildet den Firmenvordruck nach und steckt in pdf_form.py.
+
 Die vier Belegarten teilen sich Kopf, Kundenblock, Positionstabelle und
 Fußzeile; nur die Teile dazwischen unterscheiden sich.
 """
@@ -35,6 +38,13 @@ DEFAULTS = {
     "footer_text": "",
     "show_logo": True,
     "show_qr": True,
+    "layout": "standard",
+}
+
+# Auswählbare Layouts: Schlüssel (so steht er in der Datenbank) -> Beschriftung.
+LAYOUTS = {
+    "standard": "Standard",
+    "formular": "Formular (Vordruck)",
 }
 
 # Nur die Standardschriften von PDF – die braucht kein Font-Embedding und
@@ -66,6 +76,9 @@ class _Layout:
         self.show_logo = _flag(template, "show_logo")
         self.show_qr = _flag(template, "show_qr")
         self.name = getattr(template, "name", None) or "Standard"
+        key = str(value("layout") or DEFAULTS["layout"])
+        self.layout = key if key in LAYOUTS else DEFAULTS["layout"]
+        self.form = self.layout == "formular"
 
 
 def _hex(value, fallback: str) -> str:
@@ -301,6 +314,13 @@ def _notes_block(doc_obj, st: dict, heading: str = "Hinweise") -> list:
             Paragraph(text, st["body"])]
 
 
+def _form(doc_obj, kind: str, settings, layout: _Layout, title: str) -> bytes:
+    """Weiche auf das Vordruck-Layout. Der Import steht hier, weil pdf_form
+    seinerseits _euro/_date aus diesem Modul holt."""
+    from . import pdf_form
+    return pdf_form.render(doc_obj, kind, settings, layout, title)
+
+
 def _build(buf, title: str, story: list, settings, layout: _Layout) -> bytes:
     doc = _doc(buf, title)
     footer = _footer_factory(settings, layout)
@@ -311,6 +331,9 @@ def _build(buf, title: str, story: list, settings, layout: _Layout) -> bytes:
 # --------------------------- Rechnung ------------------------------------
 def invoice_pdf(invoice: models.Invoice, settings=None, template=None) -> bytes:
     layout = _Layout(template)
+    if layout.form:
+        return _form(invoice, "invoice", settings, layout,
+                     f"Rechnung {invoice.number}")
     st = _styles(layout)
     story = _company_header(settings, layout, st)
     story += _title_block("RECHNUNG", layout, st)
@@ -390,6 +413,8 @@ def quote_pdf(quote, settings=None, template=None) -> bytes:
     """PDF für ein Angebot – wie die Rechnung, aber ohne Zahlungsstatus und
     GiroCode, dafür mit Gültigkeitsdatum."""
     layout = _Layout(template)
+    if layout.form:
+        return _form(quote, "quote", settings, layout, f"Angebot {quote.number}")
     st = _styles(layout)
     story = _company_header(settings, layout, st)
     story += _title_block("ANGEBOT", layout, st)
@@ -416,6 +441,9 @@ def delivery_note_pdf(delivery_note, settings=None, template=None) -> bytes:
     """PDF für einen Lieferschein – reiner Liefernachweis: nur Beschreibung
     und Menge je Position, keine Preise/Summen."""
     layout = _Layout(template)
+    if layout.form:
+        return _form(delivery_note, "delivery_note", settings, layout,
+                     f"Lieferschein {delivery_note.number}")
     st = _styles(layout)
     story = _company_header(settings, layout, st)
     story += _title_block("LIEFERSCHEIN", layout, st)
@@ -472,6 +500,9 @@ def credit_note_pdf(credit_note, settings=None, template=None) -> bytes:
     """PDF für eine Gutschrift. Kein GiroCode: hier fließt Geld zurück, der
     Betrag wird erstattet oder mit der nächsten Rechnung verrechnet."""
     layout = _Layout(template)
+    if layout.form:
+        return _form(credit_note, "credit_note", settings, layout,
+                     f"Gutschrift {credit_note.number}")
     st = _styles(layout)
     story = _company_header(settings, layout, st)
     story += _title_block("GUTSCHRIFT", layout, st)

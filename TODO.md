@@ -2,7 +2,7 @@
 RECHNUNGS-APP – ROADMAP (TODO.md)
 ================================================================================
 
-Stand: 2026-08-28
+Stand: 2026-08-31
 
 KONVENTIONEN
 ------------
@@ -175,6 +175,21 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     PDF-Download nimmt ?template=<id>, und ab zwei Vorlagen fragt die Liste
     beim Klick nach. Ohne Vorlage gilt pdf.DEFAULTS – das bisherige Aussehen.
     pdf.py rendert alle vier Belegarten aus gemeinsamen Bausteinen.
+[X] Layout „Formular“ als zweites Aussehen einer Vorlage (pdf_form.py, Spalte
+    pdf_templates.layout): der Firmenvordruck 1:1 nach dem alten
+    Excel-Muster – Kopfbalken, Absender rechts oben, die vier Ankreuzfelder
+    (Angebot / Bestellung / Lieferschein Nr. / Rechnung-Nr., bei einer
+    Gutschrift heißt die letzte Zeile „Gutschrift-Nr.“), die Zeile
+    „Bestellung / Lieferdatum“, der Positionskasten mit Menge, Beschreibung,
+    Einzelpreis und Euro sowie die Kästen für Zwischensumme, Mehrwertsteuer
+    und Endsumme. Alle Maße stehen als Pixel der Vorlage im Code, damit sich
+    jede Linie am Original nachmessen lässt. Firmenname, Anschrift,
+    Bankverbindung und Steuernummer kommen aus den Firmendaten, die
+    Akzentfarbe ist die Druckfarbe, der Kopftext wird zur Branchenzeile, der
+    Fußtext zum Kleingedruckten. Lange Belege laufen auf weiteren Seiten
+    weiter, die Summen stehen auf der letzten. Einen GiroCode gibt es in
+    diesem Layout nicht – dafür stehen Zahlungsziel, Skonto und der
+    Zahlungsstand unten im Kleingedruckten.
 [ ] Wiederkehrende Rechnungen
 [ ] Freigabe-Workflow
 [ ] Mehrwährungsfähigkeit (bisher nur EUR)
@@ -270,6 +285,13 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Sperrfrist je Alarmart und schaltbar über ALERTS_ENABLED (Vorgabe aus,
     scripts/setup-prod.sh schaltet ein). Probealarm über die Oberfläche.
     Die Zähler liegen wie Login-Sperre und Rate-Limit im Prozess.
+[X] Monitoring aktualisiert sich auf Wunsch selbst (app.js,
+    startMonitoringAuto): Auswahl „Automatisch“ mit 1, 2 oder 10 Sekunden
+    bzw. einer Minute, Vorgabe bleibt „aus“. Die Wahl steht im localStorage
+    (rechnung.monitoring.interval), der Takt läuft nur in der
+    Monitoring-Ansicht und ruht in einem Tab im Hintergrund; ein noch
+    laufender Abruf wird nicht vom nächsten überholt. Neben der Auswahl
+    steht, wann die Zahlen zuletzt geholt wurden.
 [ ] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
     `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
     mehrere Repliken nicht überstehen)
@@ -307,13 +329,20 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     (Anwesenheitsanzeige), können sich aber weiterhin überschreiben.
     Rechnungen schützt die Bearbeitungssperre. Nächster Schritt, falls das
     im Alltag weh tut.
-
 Sonst ist hier nichts geparkt.
 
 
 --------------------------------------------------------------------------------
 10. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-31, siebter Durchgang
+  * Monitoring aktualisiert sich auf Wunsch selbst – 1, 2, 10 Sekunden oder
+    eine Minute, gemerkt im Browser (Abschnitt 6).
+  * Zweites PDF-Layout „Formular“: der Firmenvordruck aus der alten
+    Excel-Datei, nachgezeichnet in pdf_form.py und je Vorlage wählbar
+    (Abschnitt 3).
+  * Teststand: 216 Backend- und 76 Frontend-Tests.
+
 2026-08-28, sechster Durchgang
   * Gutschriften als eigene Belegart, voll oder in Teilen zur Rechnung
     (Abschnitt 3).

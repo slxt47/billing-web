@@ -1053,7 +1053,8 @@ def default_pdf_template(db: Session) -> models.PdfTemplate | None:
 
 def _apply_template(tpl: models.PdfTemplate, data: schemas.PdfTemplateIn) -> None:
     for field in ("name", "accent_color", "header_color", "font_family",
-                  "font_size", "header_note", "footer_text", "show_logo", "show_qr"):
+                  "font_size", "header_note", "footer_text", "show_logo", "show_qr",
+                  "layout"):
         setattr(tpl, field, getattr(data, field))
 
 
