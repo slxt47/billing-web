@@ -105,6 +105,90 @@ def test_preview_needs_no_real_document(admin_client):
     assert admin_client.get("/api/invoices").json() == []
 
 
+# ---------------------------------------------------- Vordruck ("formular")
+FORM_TEMPLATE = {**TEMPLATE, "name": "Vordruck", "layout": "formular",
+                 "font_family": "Helvetica"}
+
+
+def test_layout_defaults_to_standard(admin_client):
+    tpl = admin_client.post("/api/pdf-templates", json=TEMPLATE).json()
+    assert tpl["layout"] == "standard"
+
+
+def test_unknown_layout_is_rejected(admin_client):
+    assert admin_client.post("/api/pdf-templates",
+                             json={**TEMPLATE, "layout": "papyrus"}).status_code == 400
+
+
+def test_form_layout_renders_every_document(admin_client):
+    """Der Vordruck muss alle vier Belegarten können – auch den Lieferschein,
+    der gar keine Preise hat."""
+    tpl = admin_client.post("/api/pdf-templates", json=FORM_TEMPLATE).json()
+    assert tpl["layout"] == "formular"
+    invoice = make_invoice(admin_client)
+    quote = admin_client.post("/api/quotes", json={
+        "customer_name": "Angebot AG", "tax_rate": 20,
+        "items": [{"description": "Konzept", "quantity": 1, "unit_price": 100}]}).json()
+    dn = admin_client.post("/api/delivery-notes", json={
+        "customer_name": "Liefer GmbH",
+        "items": [{"description": "Kiste", "quantity": 1}]}).json()
+    cn = admin_client.post(f"/api/invoices/{invoice['id']}/credit-note", json={}).json()
+
+    for url in (f"/api/invoices/{invoice['id']}/pdf",
+                f"/api/quotes/{quote['id']}/pdf",
+                f"/api/delivery-notes/{dn['id']}/pdf",
+                f"/api/credit-notes/{cn['id']}/pdf"):
+        assert admin_client.get(f"{url}?template={tpl['id']}").content.startswith(b"%PDF")
+
+
+def test_form_layout_previews_and_switches_back(admin_client):
+    form = admin_client.post("/api/pdf-templates", json=FORM_TEMPLATE).json()
+    assert admin_client.get(f"/api/pdf-templates/{form['id']}/preview"
+                            ).content.startswith(b"%PDF")
+    back = admin_client.put(f"/api/pdf-templates/{form['id']}",
+                            json={**FORM_TEMPLATE, "layout": "standard"}).json()
+    assert back["layout"] == "standard"
+
+
+def test_form_layout_breaks_long_documents_into_pages():
+    """Mehr Positionen als Zeilen im Kasten -> weitere Seiten, Summen nur
+    auf der letzten."""
+    from datetime import date
+
+    from app import models, pdf, pdf_form
+
+    invoice = models.Invoice(number="RE-2026-0001", customer_name="Viel GmbH",
+                             customer_address="Weg 1\n12345 Ort", issue_date=date.today(),
+                             tax_rate=20, status=models.STATUS_OPEN, paid_amount=0,
+                             discount_percent=0, small_business=False,
+                             skonto_percent=0, skonto_days=0)
+    invoice.items = [models.InvoiceItem(description=f"Position {i}", quantity=1,
+                                        unit_price=10)
+                     for i in range(pdf_form.ROWS_PER_PAGE + 5)]
+
+    class Formular:
+        name = "Vordruck"
+        layout = "formular"
+        accent_color = "#0021c6"
+        header_color = "#2d3748"
+        font_family = "Helvetica"
+        font_size = 10
+        header_note = ""
+        footer_text = ""
+        show_logo = True
+        show_qr = True
+
+    def pages(document: bytes) -> int:
+        return document.count(b"/Type /Page\n")
+
+    data = pdf.invoice_pdf(invoice, None, Formular())
+    assert data.startswith(b"%PDF")
+    assert pages(data) == 2
+
+    invoice.items = invoice.items[:1]
+    assert pages(pdf.invoice_pdf(invoice, None, Formular())) == 1
+
+
 def test_pdf_still_works_without_any_template(user_client):
     invoice = make_invoice(user_client)
     assert user_client.get(f"/api/invoices/{invoice['id']}/pdf").content.startswith(b"%PDF")

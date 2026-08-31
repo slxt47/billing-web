@@ -1089,6 +1089,8 @@ def create_pdf_template(data: schemas.PdfTemplateIn,
                         db: Session = Depends(get_db)):
     if data.font_family not in pdf.FONT_FAMILIES:
         raise HTTPException(400, f"Unbekannte Schrift: {data.font_family}")
+    if data.layout not in pdf.LAYOUTS:
+        raise HTTPException(400, f"Unbekanntes Layout: {data.layout}")
     if crud.get_pdf_template_by_name(db, data.name):
         raise HTTPException(400, f"Es gibt schon eine Vorlage namens {data.name}")
     return crud.create_pdf_template(db, data)
@@ -1103,6 +1105,8 @@ def edit_pdf_template(template_id: int, data: schemas.PdfTemplateIn,
         raise HTTPException(404, "PDF-Vorlage nicht gefunden")
     if data.font_family not in pdf.FONT_FAMILIES:
         raise HTTPException(400, f"Unbekannte Schrift: {data.font_family}")
+    if data.layout not in pdf.LAYOUTS:
+        raise HTTPException(400, f"Unbekanntes Layout: {data.layout}")
     other = crud.get_pdf_template_by_name(db, data.name)
     if other and other.id != tpl.id:
         raise HTTPException(400, f"Es gibt schon eine Vorlage namens {data.name}")

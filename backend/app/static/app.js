@@ -109,6 +109,8 @@ function show(view) {
   if (view !== "new" && currentEditInvoiceId !== null) releaseInvoiceLock();
   // Anwesenheit gilt immer nur für die Ansicht, in der der Beleg offen ist.
   if (currentPresence && PRESENCE_VIEWS[currentPresence.type] !== view) stopPresence();
+  // Das Monitoring aktualisiert sich nur, solange es auch zu sehen ist.
+  if (view !== "monitoring") stopMonitoringAuto();
   for (const [name, el] of Object.entries(views)) el.hidden = name !== view;
   for (const n of Object.keys(views)) {
     const btn = $(`#nav-${n}`);
@@ -120,7 +122,7 @@ function show(view) {
   if (view === "history") { historyNotice(""); loadHistory(); }
   if (view === "credit") loadCreditNotes();
   if (view === "reports") loadReports();
-  if (view === "monitoring") loadMonitoring();
+  if (view === "monitoring") { loadMonitoring(); startMonitoringAuto(); }
   if (view === "customers") loadCustomers();
   if (view === "products") loadProducts();
   if (view === "settings") loadSettings();
@@ -1939,6 +1941,17 @@ function fmtDuration(seconds) {
 }
 
 async function loadMonitoring() {
+  // Bei 1 s Takt darf sich ein langsamer Abruf nicht mit dem nächsten stapeln.
+  if (monitoringBusy) return;
+  monitoringBusy = true;
+  try {
+    await fillMonitoring();
+  } finally {
+    monitoringBusy = false;
+  }
+}
+
+async function fillMonitoring() {
   const res = await fetch("/api/admin/metrics");
   if (!res.ok) return;
   const m = await res.json();
@@ -1988,7 +2001,46 @@ async function loadMonitoring() {
     body.appendChild(tr);
   }
   $("#monitoring-noerrors").hidden = (m.recent_errors || []).length > 0;
+  $("#monitoring-stamp").textContent =
+    "Stand " + new Date().toLocaleTimeString("de-DE");
 }
+
+// Automatisch aktualisieren: das gewählte Intervall überlebt im localStorage,
+// der Timer läuft nur, solange die Monitoring-Ansicht wirklich offen ist.
+const MONITORING_INTERVAL_KEY = "rechnung.monitoring.interval";
+let monitoringTimer = null;
+let monitoringBusy = false;
+
+function stopMonitoringAuto() {
+  if (monitoringTimer === null) return;
+  clearInterval(monitoringTimer);
+  monitoringTimer = null;
+}
+
+function startMonitoringAuto() {
+  stopMonitoringAuto();
+  const seconds = parseInt($("#monitoring-auto").value, 10) || 0;
+  if (!seconds) return;
+  monitoringTimer = setInterval(() => {
+    // Ein Tab im Hintergrund muss nicht jede Sekunde nachfragen.
+    if (!document.hidden && !views.monitoring.hidden) loadMonitoring();
+  }, seconds * 1000);
+}
+
+$("#monitoring-auto").onchange = () => {
+  try { localStorage.setItem(MONITORING_INTERVAL_KEY, $("#monitoring-auto").value); }
+  catch (_) { /* Speicher blockiert – dann gilt die Wahl nur für diese Sitzung */ }
+  startMonitoringAuto();
+};
+
+(function restoreMonitoringInterval() {
+  let saved = null;
+  try { saved = localStorage.getItem(MONITORING_INTERVAL_KEY); } catch (_) { return; }
+  const select = $("#monitoring-auto");
+  if (saved !== null && [...select.options].some((o) => o.value === saved)) {
+    select.value = saved;
+  }
+})();
 
 $("#monitoring-refresh").onclick = loadMonitoring;
 $("#monitoring-prom").onclick = () => downloadUrl("/api/admin/metrics.prom", "metrics.prom");
@@ -2086,6 +2138,7 @@ function renderPdfTemplates() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${esc(t.name)}</td>
+      <td>${t.layout === "formular" ? "Formular" : "Standard"}</td>
       <td>${esc(t.font_family)} ${t.font_size} pt</td>
       <td>
         <span class="swatch" style="background:${esc(t.accent_color)}"></span>
@@ -2110,6 +2163,7 @@ function startTemplateEdit(t) {
   const f = $("#template-form");
   f.template_id.value = t.id;
   f.name.value = t.name;
+  f.layout.value = t.layout || "standard";
   f.font_family.value = t.font_family;
   f.font_size.value = t.font_size;
   f.accent_color.value = t.accent_color;
@@ -2127,6 +2181,7 @@ function resetTemplateForm() {
   const f = $("#template-form");
   f.reset();
   f.template_id.value = "";
+  f.layout.value = "standard";
   f.accent_color.value = "#2d6cdf";
   f.header_color.value = "#2d3748";
   f.font_size.value = 10;
@@ -2160,6 +2215,7 @@ $("#template-form").addEventListener("submit", async (e) => {
   const editId = f.template_id.value;
   const payload = {
     name: f.name.value.trim(),
+    layout: f.layout.value,
     font_family: f.font_family.value,
     font_size: parseFloat(f.font_size.value) || 10,
     accent_color: f.accent_color.value,

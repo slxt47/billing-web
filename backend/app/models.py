@@ -517,5 +517,8 @@ class PdfTemplate(Base):
     show_logo = Column(Boolean, nullable=False, default=True)
     show_qr = Column(Boolean, nullable=False, default=True)
 
+    # "standard" oder "formular" (Vordruck, siehe pdf_form.py)
+    layout = Column(String(20), nullable=False, default="standard")
+
     is_default = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

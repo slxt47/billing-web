@@ -146,7 +146,21 @@ PDF TEMPLATES:
 template. Without a template, `pdf.DEFAULTS` reproduces the previous
 hard-coded look exactly. A `pdf_templates` row carries colours, one of the
 three built-in PDF font families (no font embedding), size, header/footer text
-and the logo/GiroCode switches; exactly one row is `is_default`. Every PDF
+and the logo/GiroCode switches; exactly one row is `is_default`.
+
+A template also picks one of two layouts (`pdf.LAYOUTS`, column `layout`).
+"standard" is the Platypus flow above; "formular" hands the document to
+`pdf_form.py`, which redraws the company's pre-printed form on a bare canvas:
+banner, sender block, the four tick boxes (quote / order / delivery note /
+invoice — a credit note relabels the invoice row so its number cannot be
+mistaken for one), the item box with its four columns and the three sum
+boxes. All coordinates are given in pixels of the original 641x1088 scan
+(`_x()`/`_y()`, A4 with 17.5 mm side margins), so any line can be re-measured
+against the original. Items wrap inside the description column and overflow
+onto further pages; the sums are printed on the last one. Payment terms,
+skonto and what has already been settled go into the small print at the
+bottom, where the form has room for them — there is no GiroCode in this
+layout. Every PDF
 endpoint takes `?template=<id>` (`main.pdf_template` resolves explicit id →
 default → None), and `/api/pdf-templates/{id}/preview` renders a sample
 invoice built in memory, so a template can be judged without touching real
@@ -168,6 +182,9 @@ classes, slow requests, response-time sum/max, the last 20 server errors) and
 records failed logins from the login route. `GET /api/admin/metrics` returns
 that plus document counts; `/api/admin/metrics.prom` the same in Prometheus
 text format. Both are admin-only — there is no separate monitoring account.
+The view can poll itself (1, 2, 10 or 60 s, kept in `localStorage`); the timer
+is bound to the view and skips hidden tabs, and a request in flight is never
+overtaken by the next tick.
 Alerts (many 5xx, many failed logins, stale or missing backup) go by e-mail to
 the company address from the settings, at most once per `ALERT_COOLDOWN` per
 kind; the check runs from the middleware at most once a minute and only when
@@ -436,7 +453,8 @@ best effort: a failing SMTP server is logged but never breaks the payment or
 status change.
 
 PDF GENERATION:
-`pdf.py` builds invoice, quote, and delivery-note PDFs with ReportLab,
+`pdf.py` builds invoice, quote, and delivery-note PDFs with ReportLab (or
+hands them to `pdf_form.py` for the "formular" layout),
 including company letterhead/logo, item table, tax/discount/skonto
 breakdown, and — for invoices with a valid IBAN — a GiroCode/EPC-QR payment
 code generated with the `qrcode` library.

@@ -486,6 +486,16 @@
         <button type="button" id="monitoring-refresh" class="secondary">🔄 Aktualisieren</button>
         <button type="button" id="monitoring-prom" class="secondary">⬇️ Prometheus-Format</button>
         <button type="button" id="monitoring-test-alert" class="secondary">✉️ Probealarm senden</button>
+        <label class="inline">Automatisch
+          <select id="monitoring-auto">
+            <option value="0">aus</option>
+            <option value="1">alle 1 s</option>
+            <option value="2">alle 2 s</option>
+            <option value="10">alle 10 s</option>
+            <option value="60">jede Minute</option>
+          </select>
+        </label>
+        <span id="monitoring-stamp" class="hint"></span>
         <span id="monitoring-msg"></span>
       </div>
       <div class="kpi-grid" id="monitoring-kpis"></div>
@@ -669,14 +679,26 @@
       </div>
 
       <h3>PDF-Vorlagen</h3>
-      <p class="hint">Bestimmen das Aussehen der PDFs: Farben, Schrift, Kopf- und
-        Fußtext, Logo und GiroCode. Eine Vorlage ist die Vorgabe; beim Download
-        lässt sich eine andere wählen. Ohne Vorlage bleibt das Standardaussehen.</p>
+      <p class="hint">Bestimmen das Aussehen der PDFs: Layout, Farben, Schrift,
+        Kopf- und Fußtext, Logo und GiroCode. Eine Vorlage ist die Vorgabe; beim
+        Download lässt sich eine andere wählen. Ohne Vorlage bleibt das
+        Standardaussehen.</p>
+      <p class="hint">Das Layout „Formular“ bildet den Firmenvordruck nach:
+        Kopfbalken, Ankreuzfelder für Angebot/Bestellung/Lieferschein/Rechnung,
+        Positionskasten und die drei Summenkästen. Dort ist die Akzentfarbe die
+        Druckfarbe des Vordrucks, der Kopftext steht als Branchenzeile rechts
+        oben, der Fußtext im Kleingedruckten – einen GiroCode gibt es nicht.</p>
       <form id="template-form">
         <input type="hidden" name="template_id" value="">
         <div class="grid">
           <label>Name *
             <input type="text" name="name" required placeholder="z. B. Standard, Grün">
+          </label>
+          <label>Layout
+            <select name="layout">
+              <option value="standard">Standard</option>
+              <option value="formular">Formular (Vordruck)</option>
+            </select>
           </label>
           <label>Schrift
             <select name="font_family">
@@ -714,7 +736,7 @@
       <div class="table-scroll">
         <table id="template-table">
           <thead>
-            <tr><th>Name</th><th>Schrift</th><th>Farben</th><th>Vorgabe</th><th>Aktionen</th></tr>
+            <tr><th>Name</th><th>Layout</th><th>Schrift</th><th>Farben</th><th>Vorgabe</th><th>Aktionen</th></tr>
           </thead>
           <tbody id="template-body"></tbody>
         </table>
