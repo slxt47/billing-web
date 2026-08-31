@@ -238,6 +238,10 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 [X] Ein Logo-Upload löscht keine ungespeicherten Firmendaten mehr: der
     Handler frischt nur noch die Vorschau auf, statt das Formular neu vom
     Server zu füllen (app.js: showLogo)
+[X] IBAN-Feld in den Firmendaten mit österreichischem statt deutschem
+    Platzhalter (index.html: placeholder="AT.." statt "DE.."); das iban-Feld
+    selbst ist ein freies Textfeld ohne Längen-/Länderprüfung, betroffen war
+    also nur der Platzhaltertext plus die Beispiel-IBANs in den Tests.
 [X] Artikelimport und ein CSV-Massenexport für Kunden und Artikel: Artikelimport
     (POST /api/products/import, „Datei wählen & importieren“ in der
     Artikelansicht) spiegelt den Kundenimport – CSV oder JSON, Pflichtfeld nur
@@ -412,6 +416,16 @@ Sonst ist hier nichts geparkt.
     Burger-Knopf und Hell-/Dunkel-Umschalter haben zusätzlich zum title
     jetzt ein aria-label, das Burger-Menü ein role="menu". Der
     viewport-Meta-Tag war schon vorhanden.
+[X] Dashboard-Diagramm zeigt auf dem Handy nur die letzten drei statt aller
+    sechs Monate (app.js: loadDashboard, window.innerWidth <= 600) – sechs
+    Balken nebeneinander waren auf einem schmalen Bildschirm zu eng.
+[X] Menüleiste auf dem Handy: nur der aktive Menüpunkt bleibt in der Leiste
+    stehen, alle anderen acht Kernpunkte wandern zusätzlich zu den fünf
+    Verwaltungspunkten ins Burger-Menü (app.js: syncMobileNav). Auf einem
+    breiten Bildschirm bleibt die volle Leiste wie in Abschnitt 10 oben schon
+    beschrieben; ein Resize (mit 150 ms Verzögerung, kein Event-Sturm) und
+    jeder Ansichtswechsel stellen die Zuordnung neu ein, der Burger-Knopf
+    selbst steht auf dem Handy jedem Benutzer offen, nicht nur Admins.
 
 
 --------------------------------------------------------------------------------
@@ -419,10 +433,19 @@ Sonst ist hier nichts geparkt.
 --------------------------------------------------------------------------------
 Aktuell nichts Neues.
 
-
 --------------------------------------------------------------------------------
 12. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-31, zwölfter Durchgang
+  * Dashboard-Diagramm zeigt auf dem Handy nur die letzten drei Monate statt
+    aller sechs (Abschnitt 10).
+  * Menüleiste auf dem Handy: nur der aktive Menüpunkt bleibt sichtbar, alle
+    anderen wandern ins Burger-Menü, das dort jedem offensteht statt nur
+    Admins; ein Resize oder Ansichtswechsel stellt neu ein (Abschnitt 10).
+  * IBAN-Platzhalter in den Firmendaten von DE auf AT umgestellt, dieselbe
+    Änderung in den Beispiel-IBANs der Tests nachgezogen (Abschnitt 4).
+  * Teststand: 249 Backend- und 108 Frontend-Tests.
+
 2026-08-31, elfter Durchgang
   * Abschnitt 10 „TODO's“ (neu von dir angelegt) abgearbeitet und nach
     WORKINSTRUCTIONS.md Punkt 5 in einen neuen Sachabschnitt einsortiert, der

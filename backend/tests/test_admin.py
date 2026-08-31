@@ -83,11 +83,11 @@ def test_settings_are_readable_for_everyone_but_writable_only_for_admins(user_cl
 
 def test_admin_saves_settings(admin_client):
     saved = admin_client.put("/api/settings", json={
-        "company_name": "Muster GmbH", "iban": "DE02120300000000202051",
+        "company_name": "Muster GmbH", "iban": "AT611904300234573201",
         "email": "info@muster.example"}).json()
     assert saved["company_name"] == "Muster GmbH"
     assert saved["has_logo"] is False
-    assert admin_client.get("/api/settings").json()["iban"] == "DE02120300000000202051"
+    assert admin_client.get("/api/settings").json()["iban"] == "AT611904300234573201"
 
 
 def test_logo_upload_and_download(admin_client):

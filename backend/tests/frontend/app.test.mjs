@@ -80,13 +80,16 @@ function addFormNamedAccess(window) {
 
 /** Startet die App in einem frischen jsdom-Fenster. */
 function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
-                    presence = [], others = [], routes = {} } = {}) {
+                    presence = [], others = [], routes = {}, innerWidth } = {}) {
   const dom = new JSDOM(HTML, { url: "https://rechnungen.localhost/",
                                 runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
   openWindows.push(window);
   const requests = [];
 
+  // jsdoms Vorgabe ist 1024 (Desktop); nur setzen, wenn ein Test ausdrücklich
+  // eine andere Breite braucht (Handy-Menü, Dashboard-Diagramm).
+  if (innerWidth) window.innerWidth = innerWidth;
   window.Headers = Headers;
   window.alert = () => {};
   window.confirm = () => true;
@@ -757,14 +760,14 @@ test("Ein Logo-Upload löscht die eingetippten Firmendaten nicht", async () => {
 
   const form = window.document.querySelector("#settings-form");
   form.company_name.value = "Neue Firma GmbH";
-  form.iban.value = "DE02120300000000202051";
+  form.iban.value = "AT611904300234573201";
 
   pickFile(window, "#logo-input", "logo.png", "image/png");
   await settle(50);
 
   assert.ok(requests.find((r) => r.url === "/api/settings/logo" && r.options.method === "POST"));
   assert.equal(form.company_name.value, "Neue Firma GmbH");
-  assert.equal(form.iban.value, "DE02120300000000202051");
+  assert.equal(form.iban.value, "AT611904300234573201");
   assert.equal(window.document.querySelector("#logo-preview").hidden, false);
 });
 
@@ -1401,6 +1404,79 @@ test("Die Kernpunkte stehen weiterhin in der Menüleiste, nicht im Burger-Menü"
                     "nav-products"]) {
     assert.ok(primary.querySelector(`#${id}`), `${id} steht in der Kernleiste`);
   }
+});
+
+// -------------------------------- Burger-Menü auf dem Handy
+test("Auf dem Handy bleibt nur der aktive Menüpunkt in der Leiste", async () => {
+  const { window } = startApp({ innerWidth: 400 });
+  await settle();
+
+  const primary = window.document.querySelector("#nav-primary");
+  const buttons = [...primary.querySelectorAll("button")];
+  assert.deepEqual(buttons.map((b) => b.id), ["nav-dashboard"]);
+
+  // Alle anderen acht Kernpunkte stecken jetzt im Burger-Menü.
+  const menu = window.document.querySelector("#nav-more-menu");
+  for (const id of ["nav-new", "nav-quotes", "nav-delivery", "nav-history",
+                    "nav-credit", "nav-reports", "nav-customers", "nav-products"]) {
+    assert.ok(menu.querySelector(`#${id}`), `${id} steht im Burger-Menü`);
+  }
+});
+
+test("Auf dem Handy steht der Burger-Knopf auch ohne Admin-Rechte offen", async () => {
+  const { window } = startApp({
+    innerWidth: 400,
+    routes: { "/api/me": { user: "tester", is_admin: false, csrf_token: "t" } },
+  });
+  await settle();
+  assert.equal(window.document.querySelector("#nav-more-toggle").hidden, false);
+});
+
+test("Ein Klick auf einen Menüpunkt macht ihn zum neuen aktiven Handy-Punkt", async () => {
+  const { window } = startApp({ innerWidth: 400 });
+  await settle();
+
+  window.document.querySelector("#nav-more-toggle").click();
+  window.document.querySelector("#nav-customers").click();
+  await settle(20);
+
+  const primary = window.document.querySelector("#nav-primary");
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id),
+                   ["nav-customers"]);
+  // Dashboard ist jetzt selbst im Burger-Menü zu finden.
+  assert.ok(window.document.querySelector("#nav-more-menu #nav-dashboard"));
+});
+
+test("Auf einem breiten Bildschirm bleibt die volle Leiste stehen", async () => {
+  const { window } = startApp({ innerWidth: 1200 });
+  await settle();
+  const primary = window.document.querySelector("#nav-primary");
+  assert.equal(primary.querySelectorAll("button").length, 9);
+});
+
+const SIX_MONTHS = {
+  ...STATS,
+  months: [
+    { label: "03/2026", revenue: 100 }, { label: "04/2026", revenue: 200 },
+    { label: "05/2026", revenue: 300 }, { label: "06/2026", revenue: 400 },
+    { label: "07/2026", revenue: 500 }, { label: "08/2026", revenue: 600 },
+  ],
+};
+
+test("Das Dashboard-Diagramm zeigt auf dem Handy nur die letzten drei Monate", async () => {
+  const { window } = startApp({ innerWidth: 400, routes: { "/api/stats": SIX_MONTHS } });
+  await settle();
+
+  const labels = [...window.document.querySelectorAll("#chart .bar-label")]
+    .map((el) => el.textContent);
+  assert.deepEqual(labels, ["06/2026", "07/2026", "08/2026"]);
+});
+
+test("Das Dashboard-Diagramm zeigt auf einem breiten Bildschirm alle sechs Monate", async () => {
+  const { window } = startApp({ innerWidth: 1200, routes: { "/api/stats": SIX_MONTHS } });
+  await settle();
+
+  assert.equal(window.document.querySelectorAll("#chart .bar-label").length, 6);
 });
 
 // -------------------------------- Positionstabellen scrollen seitwärts

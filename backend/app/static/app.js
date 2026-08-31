@@ -131,14 +131,15 @@ function show(view) {
   if (view === "users") loadUsers();
   if (view === "audit") loadAuditLog();
   if (view === "backup") loadBackups();
+  syncMobileNav();
 }
 for (const n of Object.keys(views)) {
   const btn = $(`#nav-${n}`);
   if (btn) btn.onclick = () => show(n);
 }
 
-// ---------------------- Burger-Menü (Verwaltungspunkte) ----------------------
-// Firma/Benutzer/Audit-Log/Backup/Monitoring stehen nicht mehr fest in der
+// ---------------------- Burger-Menü (Verwaltungspunkte + Handy) -----------
+// Firma/Benutzer/Audit-Log/Backup/Monitoring stehen nicht fest in der
 // Leiste, sondern hinter dem Burger-Knopf – sonst bricht die Menüzeile bei
 // jedem Admin-Login um. Derselbe Auf/Zu-Mechanismus wie beim
 // Beispieldatei-Auswahlfenster (siehe unten, #customer-import-example-menu).
@@ -153,9 +154,11 @@ navMoreToggle.onclick = (e) => {
   e.stopPropagation();
   toggleNavMoreMenu(navMoreMenu.hidden);
 };
-// Ein Klick auf einen der Menüpunkte schließt das Fenster gleich mit.
-navMoreMenu.querySelectorAll("button[id]").forEach((btn) => {
-  btn.addEventListener("click", () => toggleNavMoreMenu(false));
+// Ein Klick auf einen der Menüpunkte schließt das Fenster gleich mit –
+// delegiert auf den Container, gilt also auch für Knöpfe, die erst auf dem
+// Handy dorthin wandern (siehe syncMobileNav()).
+navMoreMenu.addEventListener("click", (e) => {
+  if (e.target.closest("button")) toggleNavMoreMenu(false);
 });
 document.addEventListener("click", (e) => {
   if (!navMoreMenu.hidden && !navMoreMenu.contains(e.target) && e.target !== navMoreToggle) {
@@ -164,6 +167,40 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !navMoreMenu.hidden) toggleNavMoreMenu(false);
+});
+
+// Auf dem Handy bleibt nur der aktive Menüpunkt in der Leiste, alle anderen
+// Kernpunkte wandern zusätzlich zu den Verwaltungspunkten ins Burger-Menü
+// (TODO.md Abschnitt 11: "einen Hauptpunkt, alles andere im Burger-Menü").
+// Auf einem breiten Bildschirm bleiben sie wie gehabt in der Leiste.
+const MOBILE_NAV_BREAKPOINT = 600;
+const navPrimary = $("#nav-primary");
+const PRIMARY_NAV_IDS = [...navPrimary.querySelectorAll("button")].map((b) => b.id);
+const navMoreAnchor = $("#nav-settings"); // erster Verwaltungspunkt: Einfügepunkt davor
+
+function syncMobileNav() {
+  const mobile = window.innerWidth <= MOBILE_NAV_BREAKPOINT;
+  const active = document.querySelector("#nav-primary button.active, #nav-more-menu button.active");
+  for (const id of PRIMARY_NAV_IDS) {
+    const btn = $(`#${id}`);
+    if (!btn) continue;
+    if (!mobile || btn === active) {
+      navPrimary.appendChild(btn);
+    } else if (btn.parentElement !== navMoreMenu) {
+      navMoreMenu.insertBefore(btn, navMoreAnchor);
+    }
+  }
+  // Ohne Admin-Rechte und auf einem breiten Bildschirm gibt es nichts, was
+  // das Burger-Menü zeigen könnte; auf dem Handy braucht es jeder, um an die
+  // ausgelagerten Kernpunkte zu kommen.
+  navMoreToggle.hidden = !(currentIsAdmin || mobile);
+}
+syncMobileNav();
+// Debounced: ein Resize feuert viele Events, ein Layout-Umbau reicht einmal.
+let navResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(navResizeTimer);
+  navResizeTimer = setTimeout(syncMobileNav, 150);
 });
 
 // "Neue Rechnung" bricht eine laufende Bearbeitung ab (inkl. Sperre) und
@@ -887,10 +924,15 @@ async function loadDashboard() {
 
   // Balken werden per DOM gebaut statt über ein style-Attribut: die CSP
   // erlaubt keine Inline-Styles (style-src 'self').
-  const max = Math.max(1, ...s.months.map((m) => m.revenue));
+  // Auf dem Handy sind sechs Balken zu eng nebeneinander – dort reichen die
+  // letzten drei Monate (dieselbe Bildschirmbreite wie die übrigen
+  // Handy-Anpassungen in styles.css, @media (max-width: 600px)).
+  const isMobile = window.innerWidth <= 600;
+  const months = isMobile ? s.months.slice(-3) : s.months;
+  const max = Math.max(1, ...months.map((m) => m.revenue));
   const chart = $("#chart");
   chart.innerHTML = "";
-  for (const m of s.months) {
+  for (const m of months) {
     const col = document.createElement("div");
     col.className = "bar-col";
     col.title = euro(m.revenue);
@@ -2956,8 +2998,9 @@ async function loadCurrentUser() {
     $("#nav-audit").hidden = !currentIsAdmin;
     $("#nav-backup").hidden = !currentIsAdmin;
     $("#nav-monitoring").hidden = !currentIsAdmin;
-    // Ohne Admin-Rechte gibt es nichts, was das Burger-Menü zeigen könnte.
-    $("#nav-more-toggle").hidden = !currentIsAdmin;
+    // Der Burger-Knopf selbst hängt zusätzlich vom Handy-Layout ab
+    // (syncMobileNav), currentIsAdmin stand beim ersten Aufruf noch nicht fest.
+    syncMobileNav();
   } catch (_) { /* fetch leitet bei 401 selbst um */ }
 }
 

@@ -651,18 +651,33 @@ worth knowing about:
 RESPONSIVE NAVIGATION (burger menu):
 The nine core nav buttons (Dashboard through Artikel) sit in `.nav-primary`,
 a `flex-wrap: nowrap` row with `overflow-x: auto` – it never wraps to a
-second line; on a narrow window it scrolls sideways within itself instead,
-so the header is always exactly one line regardless of viewport width or how
-many buttons are visible for the current user. The five admin-only buttons
-(Firma, Benutzer, Audit-Log, Backup, Monitoring) moved out of the bar
-entirely into `#nav-more-menu`, a popover behind the `#nav-more-toggle` "☰"
-button (same show/hide/click-outside/Escape pattern as the customer-import
-example-file menu – `toggleNavMoreMenu()`, mirroring `toggleExampleMenu()`).
-The toggle button itself is hidden for non-admins, same as the five buttons
-it opens. Moving a button into the popover doesn't touch its `id`, so the
+second line; on a merely narrower (not phone-sized) window it scrolls
+sideways within itself instead. The five admin-only buttons (Firma,
+Benutzer, Audit-Log, Backup, Monitoring) moved out of the bar entirely into
+`#nav-more-menu`, a popover behind the `#nav-more-toggle` "☰" button (same
+show/hide/click-outside/Escape pattern as the customer-import example-file
+menu – `toggleNavMoreMenu()`, mirroring `toggleExampleMenu()`; the click
+handler on the menu itself is delegated to the container rather than bound
+per button, since buttons get moved in and out of it at runtime, see next
+paragraph). Moving a button into the popover doesn't touch its `id`, so the
 existing `for (const n of Object.keys(views))` wiring loop that binds
 `#nav-{view}` clicks to `show(view)` finds it exactly as before, regardless
 of where in the DOM it now lives.
+
+At `window.innerWidth <= 600` (phone-sized, `MOBILE_NAV_BREAKPOINT`),
+`syncMobileNav()` goes a step further: only the button for the *current*
+view stays in `.nav-primary`, every other core button is reparented into
+`#nav-more-menu` too (inserted right before the first admin button, so core
+items list above admin ones there), and the toggle becomes visible for every
+user, not just admins – on a phone everyone needs it to reach the other
+views. `syncMobileNav()` re-sorts the buttons on three occasions: once at
+load, at the end of every `show(view)` call (the active button changes, so
+the reparenting has to follow), and on a debounced `resize` listener (150 ms,
+so a drag-resize doesn't refire it dozens of times). Widening back past the
+breakpoint restores `.nav-primary` to its original left-to-right order,
+because the loop that moves buttons back always walks the same
+`PRIMARY_NAV_IDS` array and `appendChild` on an already-attached node moves
+it rather than cloning it.
 
 MOBILE LAYOUT:
 The four line-item tables (invoice/quote/delivery-note/credit-note forms)
@@ -673,7 +688,17 @@ felt like different-sized pages. All four now sit in their own
 `.table-scroll` container like the rest. `.grid` (the two-column field
 layout used throughout the forms) collapses to one column, and `header`/
 `main`/`section` padding shrinks, under a `max-width: 600px` media query
-(the same breakpoint the customer-picker layout already used).
+(the same breakpoint the customer-picker layout already used, and the same
+600 px `syncMobileNav()` checks in JS via `window.innerWidth` – jsdom, which
+the frontend test suite runs against, doesn't implement `matchMedia`, so
+both this and the dashboard chart below read the plain property instead of
+using a media query from JS).
+
+The dashboard's 6-month revenue chart (`loadDashboard()`) shows only the
+last 3 months at that same breakpoint – six bars were too cramped on a
+phone-width chart. The `max` used to scale bar heights is computed from
+whichever subset is actually shown, not always all six, so the visible bars
+still use the full height range.
 
 The `fetch` wrapper at the top of the file attaches the `X-CSRF-Token` header
 to every non-safe request, redirects to `/login` on 401, and reloads once on a
