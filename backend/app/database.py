@@ -31,7 +31,7 @@ def get_db():
 
 def init_db(retries: int = 10, delay: float = 2.0):
     """Wartet auf die DB und legt die Tabellen an."""
-    from . import models  # noqa: F401 — registriert die Modelle bei Base
+    from . import models  # noqa: F401 – registriert die Modelle bei Base
 
     last_err = None
     for _ in range(retries):

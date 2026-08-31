@@ -32,7 +32,12 @@ header {
   gap: 1rem;
   border-bottom: 1px solid var(--border);
 }
-header h1 { margin: 0; font-size: 1.4rem; }
+header h1 { margin: 0; font-size: 1.4rem; flex: 0 0 auto; }
+nav {
+  display: flex; align-items: center; gap: 0.4rem;
+  /* darf schrumpfen, sonst kann .nav-primary innen nicht seitwärts scrollen */
+  flex: 1 1 auto; min-width: 0;
+}
 nav button {
   background: transparent;
   color: var(--muted);
@@ -43,12 +48,29 @@ nav button {
   border-radius: 6px;
 }
 nav button.active, nav button:hover { background: var(--primary); color: #fff; }
-.nav-user { color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem; }
+.nav-user { color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem; flex: 0 0 auto; }
 nav a#logout {
   color: var(--muted); text-decoration: none; font-size: 0.9rem;
   padding: 0.5rem 0.8rem; border-radius: 6px; border: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 nav a#logout:hover { color: #fff; border-color: var(--red); background: var(--red); }
+
+/* Kernpunkte der Navigation: immer eine Zeile. Reicht die Breite nicht,
+   scrollt die Leiste seitwärts statt umzubrechen – ein Fenster mit weniger
+   Menüpunkten (normaler Benutzer) soll sich nicht anders verhalten als eins
+   mit mehr (Admin, siehe .nav-more-menu für dessen Zusatzpunkte). */
+.nav-primary {
+  display: flex; gap: 0.2rem; flex-wrap: nowrap; min-width: 0;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+}
+.nav-primary button { flex: 0 0 auto; white-space: nowrap; }
+
+/* Burger-Menü: Verwaltungspunkte (Firma, Benutzer, Audit-Log, Backup,
+   Monitoring – nur Admin) stehen nicht mehr fest in der Leiste. */
+.nav-more-anchor { position: relative; flex: 0 0 auto; }
+.nav-more-menu { display: flex; flex-direction: column; gap: 0.15rem; min-width: 10rem; }
+.nav-more-menu button { text-align: left; margin: 0; white-space: nowrap; }
 
 /* Login-Seite */
 .login-page {
@@ -256,6 +278,12 @@ tr.inactive-row { opacity: 0.55; }
 @media (max-width: 600px) {
   .picker { flex-direction: column; align-items: stretch; gap: 0.25rem; }
   .picker .picker-search, .picker select { flex: 1 1 auto; }
+  /* Zweispaltige Formularfelder auf dem Handy untereinander statt
+     nebeneinander gequetscht. */
+  .grid { grid-template-columns: 1fr; }
+  header { padding: 0.75rem 1rem; }
+  main { padding: 0 0.5rem; }
+  section { padding: 1rem 1.2rem; }
 }
 
 /* Live-Anzeige: wer hat denselben Beleg gerade offen */

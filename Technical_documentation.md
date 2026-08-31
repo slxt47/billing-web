@@ -53,7 +53,7 @@ TECHNOLOGY STACK:
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 249 backend + 95 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 249 backend + 102 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -149,7 +149,7 @@ The tables and their relationships as an ER diagram (attributes trimmed to
 the ones that carry a relationship or explain the row; the full column list
 is the table above). `customer_name`/`customer_address`/`customer_contact_person`
 on every document are a *copy* taken at creation time, not a foreign key to
-`customers` — a later edit or anonymization of the customer record does not
+`customers` – a later edit or anonymization of the customer record does not
 change wording on an already-issued document:
 
 ```mermaid
@@ -210,14 +210,14 @@ erDiagram
 
 CREDIT NOTES:
 A credit note (`GS-YYYY-NNNN`, `crud.create_credit_note`) is its own document
-type, not a status on the invoice — an invoice can be credited in several
+type, not a status on the invoice – an invoice can be credited in several
 steps. It shares the per-year number sequence with the other three. Linked to
 an invoice through `credit_notes.invoice_id`, it lowers that invoice's open
 amount: `Invoice.remaining = total − paid_amount − credited_amount`, where
 `credited_amount` sums the non-cancelled credit notes (relationship with
 `lazy="selectin"`). `POST /api/invoices/{id}/credit-note` builds one from the
-invoice — all items (full) or the posted ones (partial), with the invoice's
-discount folded into the unit prices — and refuses anything above the open
+invoice – all items (full) or the posted ones (partial), with the invoice's
+discount folded into the unit prices – and refuses anything above the open
 amount, deleting the just-created note again so nothing half-done remains.
 The invoice status is deliberately NOT flipped to "bezahlt" by a credit note:
 credited is not paid. Dashboard revenue subtracts credited amounts.
@@ -225,41 +225,47 @@ credited is not paid. Dashboard revenue subtracts credited amounts.
 PDF TEMPLATES:
 `pdf.py` renders all four document types from shared building blocks
 (`_company_header`, `_head_table`, `_customer_block`, `_priced_items_table`,
-`_footer_factory`), all parameterised by `pdf._Layout` — the resolved
+`_footer_factory`), all parameterised by `pdf._Layout` – the resolved
 template. Without a template, `pdf.DEFAULTS` reproduces the previous
 hard-coded look exactly. A `pdf_templates` row carries colours, one of the
 three built-in PDF font families (no font embedding), size, header/footer text
 and the logo/GiroCode switches; exactly one row is `is_default`.
 
-Startup seeds one ready-made template (`crud.seed_pdf_templates`, called from
-`main.on_startup` next to `seed_users`): the pre-printed form as
-"Mechatronik Neubauer e.U." with layout "formular". It is only created when
-no "formular" template exists yet, so a hand-made one is never duplicated and
-an edited one is left alone.
+Startup seeds three ready-made templates (`crud.seed_pdf_templates`, called
+from `main.on_startup` next to `seed_users`) instead of leaving a fresh
+install with nothing to pick from: two "standard"-layout presets, "Klassisch
+Blau" (`pdf.DEFAULTS`'s own colours/font, so it becomes the default on an
+empty table – `create_pdf_template` makes the first-ever row `is_default`)
+and "Modern Dunkel" (different accent/header colour and font), plus the
+pre-printed form as "Mechatronik Neubauer e.U." with layout "formular". Each
+of the three is seeded independently (`_seed_standard_templates` by name,
+`_seed_form_template` by the presence of any "formular"-layout row) so a
+renamed or deleted one is never re-created under the same name, and a
+hand-made template of your own is left alone.
 
 A template also picks one of two layouts (`pdf.LAYOUTS`, column `layout`).
 "standard" is the Platypus flow above; "formular" hands the document to
 `pdf_form.py`, which redraws the company's pre-printed form on a bare canvas:
 banner, sender block, the four tick boxes (quote / order / delivery note /
-invoice — a credit note relabels the invoice row so its number cannot be
+invoice – a credit note relabels the invoice row so its number cannot be
 mistaken for one), the item box with its four columns and the three sum
 boxes. All coordinates are given in pixels of the original 641x1088 scan
 (`_x()`/`_y()`, A4 with 17.5 mm side margins), so any line can be re-measured
 against the original. Items wrap inside the description column and overflow
 onto further pages; the sums are printed on the last one. Payment terms,
 skonto and what has already been settled go into the small print at the
-bottom, where the form has room for them — there is no GiroCode in this
+bottom, where the form has room for them – there is no GiroCode in this
 layout. Every PDF
-endpoint takes `?template=<id>` (`main.pdf_template` resolves explicit id →
-default → None), and `/api/pdf-templates/{id}/preview` renders a sample
+endpoint takes `?template=<id>` (`main.pdf_template` resolves explicit id ->
+default -> None), and `/api/pdf-templates/{id}/preview` renders a sample
 invoice built in memory, so a template can be judged without touching real
 data.
 
 REPORTS:
 `reports.py` computes both analyses from the same base: non-cancelled
 invoices by issue date minus non-cancelled credit notes by issue date (accrual
-basis). `vat_report` buckets net/tax/gross per tax rate — small-business
-documents land in the 0 % bucket — and `revenue_report` aggregates per month
+basis). `vat_report` buckets net/tax/gross per tax rate – small-business
+documents land in the 0 % bucket – and `revenue_report` aggregates per month
 and per customer plus paid/open. Both have a CSV twin (semicolon, German
 decimal commas, BOM). Neither knows expenses: the app does not track them, so
 the VAT report carries `input_tax_known: false` and the revenue report
@@ -268,8 +274,8 @@ the VAT report carries `input_tax_known: false` and the revenue report
 `custom_report()` is the third, open-ended analysis: one of the four document
 types, a period, an optional status filter, grouped by nothing (a plain
 document list), customer, month, or status. Unlike the two fixed reports it
-does not exclude anything on its own — a cancelled document counts unless the
-caller filters it out via `status` — because "free" here means the caller
+does not exclude anything on its own – a cancelled document counts unless the
+caller filters it out via `status` – because "free" here means the caller
 decides, not the report. `_HAS_AMOUNTS` is `False` for delivery notes (they
 carry no prices); the response then omits `net`/`tax`/`gross` entirely
 (`has_amounts: false`) rather than sending zeros that would look like real
@@ -281,15 +287,15 @@ RESPONSE CACHE:
 `/api/reports/` (JSON and CSV alike) in process memory for
 `CACHE_TTL_SECONDS` (default 30 s), returned with an `X-Cache: HIT` header;
 a fresh computation is `X-Cache: MISS`. Registered as the innermost
-middleware — right before the route, after the login check — so a cache hit
+middleware – right before the route, after the login check – so a cache hit
 still goes through authentication and picks up the usual security/request-ID
 headers on the way back out (see MIDDLEWARE ORDER below). Only those few
 computation-heavy endpoints are cached; document and master-data lists are
 deliberately left out, because several users work on them live (presence,
 edit lock) and a stale answer there costs more than the milliseconds a plain
 indexed query saves. A successful write to `/api/invoices`, `/api/credit-notes`
-or `/api/admin/backups` clears the whole cache — with only a handful of
-entries ever cached, that is simpler and safer than invalidating per report —
+or `/api/admin/backups` clears the whole cache – with only a handful of
+entries ever cached, that is simpler and safer than invalidating per report –
 except the invoice lock endpoint (`.../lock`), whose 90-second heartbeat
 would otherwise clear it constantly for a change that affects neither revenue
 nor tax. Toggle with `CACHE_ENABLED`. State is per-process, like the login
@@ -300,7 +306,7 @@ MONITORING:
 classes, slow requests, response-time sum/max, the last 20 server errors) and
 records failed logins from the login route. `GET /api/admin/metrics` returns
 that plus document counts; `/api/admin/metrics.prom` the same in Prometheus
-text format. Both are admin-only — there is no separate monitoring account.
+text format. Both are admin-only – there is no separate monitoring account.
 The view can poll itself (1, 2, 10 or 60 s, kept in `localStorage`). The tick
 is a chained `setTimeout` rather than `setInterval`: the next fetch is only
 scheduled once the previous one has come back, so slow answers cannot pile up
@@ -308,7 +314,7 @@ and a tab that was in the background carries on instead of getting stuck. The
 chain is bound to the view, a hidden tab skips the fetch but keeps the beat,
 and coming back to the foreground fetches at once (`visibilitychange`). Next
 to the refresh button stands when the numbers last arrived, at which rate, and
-a failed fetch with its status — otherwise a stalled poll would look like
+a failed fetch with its status – otherwise a stalled poll would look like
 fresh numbers.
 Alerts (many 5xx, many failed logins, stale or missing backup) go by e-mail to
 the company address from the settings, at most once per `ALERT_COOLDOWN` per
@@ -327,10 +333,10 @@ one per row); the endpoints refuse a second conversion with 400 and name the
 existing document, and the three `*Out` schemas carry the number so the lists
 show it instead of the button. The relationships are the parent side, so
 deleting an invoice nullifies `source_invoice_id` on its delivery note
-instead of failing on the foreign key — and frees the conversion again.
+instead of failing on the foreign key – and frees the conversion again.
 
 The three conversions form a chain, not a triangle you could complete in one
-step — going all the way round (quote -> invoice -> delivery note -> quote)
+step – going all the way round (quote -> invoice -> delivery note -> quote)
 lands on a *second*, separate quote, not back on the first one:
 
 ```mermaid
@@ -355,7 +361,7 @@ sequenceDiagram
 
 A delivery note has three states: `offen`, `abgeschlossen` and `storniert`
 (`models.DN_OPEN/DN_DONE/DN_CANCELLED`). `GET /api/delivery-notes/{id}/pdf`
-moves an open note to `abgeschlossen` — printing it is what hands it over —
+moves an open note to `abgeschlossen` – printing it is what hands it over –
 while a cancelled one keeps its state. That is a side effect on a GET, chosen
 deliberately so the plain download link in the list stays a link; the frontend
 reloads the list right after the click. `PATCH .../status` can set any of the
@@ -371,7 +377,7 @@ stateDiagram-v2
     storniert --> [*]
 ```
 
-Invoices have their own, separate state machine — a credit note lowers
+Invoices have their own, separate state machine – a credit note lowers
 `remaining` but deliberately never flips the status to "bezahlt" by itself
 (see CREDIT NOTES above):
 
@@ -399,10 +405,10 @@ to 0.
 
 Computed values (subtotal, discount, net, tax, total, remaining, overdue,
 skonto amount/date, line totals) are Python `@property` methods on the
-SQLAlchemy models, not stored columns — they are recalculated on every read.
+SQLAlchemy models, not stored columns – they are recalculated on every read.
 
 CONCURRENCY / EDIT LOCKING:
-Invoices, quotes and delivery notes all carry `locked_by` / `locked_at` —
+Invoices, quotes and delivery notes all carry `locked_by` / `locked_at` –
 originally an Invoice-only column pair, now on `Quote` and `DeliveryNote` as
 well (same two columns, same migration pattern). A user opening a document
 for editing calls `POST /api/{invoices|quotes|delivery-notes}/{id}/lock`; the
@@ -411,11 +417,11 @@ acquire/renew call and auto-expires after that. The corresponding `PUT` is
 rejected with 409 if another user currently holds an active lock. The four
 crud.py functions (`acquire_lock`, `release_lock`, `lock_status`, and the
 private `_lock_active`) work purely through the two columns and don't know
-which of the three types they're holding — the type hint is a `Lockable =
+which of the three types they're holding – the type hint is a `Lockable =
 Invoice | Quote | DeliveryNote` union rather than three separate copies. On
 the frontend, opening a quote or delivery note for editing now acquires the
 lock first (`await fetch(.../lock, {method:"POST"})`); if the response says
-`editable: false`, the click ends in an alert instead of a filled-in form —
+`editable: false`, the click ends in an alert instead of a filled-in form –
 the same flow `openInvoiceForEdit` already had, just not copy-pasted three
 times: `startQuoteEdit`/`startDeliveryEdit` became `async` and gained their
 own heartbeat timer, lock banner and release-on-cancel/release-on-navigate,
@@ -449,7 +455,7 @@ memory, so unlike the login lockout this part would survive a second replica.
 Both mechanisms side by side for one invoice with two users open on it (the
 same sequence applies verbatim to a quote or delivery note, just with
 `/api/quotes/...` or `/api/delivery-notes/...` in place of `/api/invoices/...`)
-— Bernd sees the presence banner immediately, only finds out about the lock
+– Bernd sees the presence banner immediately, only finds out about the lock
 when he actually tries to save:
 
 ```mermaid
@@ -462,7 +468,7 @@ sequenceDiagram
     API-->>Anna: locked_by=anna, editable=true
     Anna->>API: POST /api/presence/invoice/12 (heartbeat, every 10s)
     Bernd->>API: POST /api/presence/invoice/12 (heartbeat, every 10s)
-    API-->>Bernd: others=[anna]  → banner "anna has this open too"
+    API-->>Bernd: others=[anna]  -> banner "anna has this open too"
     Bernd->>API: GET /api/invoices/12/lock
     API-->>Bernd: locked_by=anna, editable=false
     Bernd->>API: PUT /api/invoices/12 (tries to save anyway)
@@ -486,7 +492,7 @@ CUSTOMER & PRODUCT IMPORT/EXPORT
 `file`; `GET /api/customers/export.csv`, `GET /api/products/export.csv`):
 Both imports take CSV *or* JSON and share one implementation in `main.py`
 (`_import_text`, `_field_for`, `_map_row`, `_rows_from_csv`, `_rows_from_json`,
-`_read_import_rows`) generalised over an alias map — `FIELD_BY_ALIAS`
+`_read_import_rows`) generalised over an alias map – `FIELD_BY_ALIAS`
 (built from `CSV_COLUMNS`) for customers, `PRODUCT_FIELD_BY_ALIAS`
 (`PRODUCT_CSV_COLUMNS`) for products, each mapping German *and* English
 column/key spellings onto the target schema's fields. Writing happens in
@@ -506,7 +512,7 @@ rejects, is skipped and reported in `errors` rather than failing the whole
 file. Caps: 1 MB, 5,000 records, 20 reported errors. Every import is written
 to the audit log.
 
-The two `export.csv` endpoints are the reverse direction — the full customer
+The two `export.csv` endpoints are the reverse direction – the full customer
 or product list, same columns as the import expects, so a round trip through
 export and re-import needs no manual editing. Built with `main._write_csv`
 (Python's `csv.writer`, not string concatenation), so a semicolon or
@@ -519,7 +525,7 @@ SECURITY:
   `SessionMiddleware` (HMAC with `SESSION_SECRET`). The cookie is set with
   `SameSite=Strict` and a lifetime of `SESSION_MAX_AGE` (default 12 h); the
   `secure` flag follows `SESSION_HTTPS_ONLY` (default false so that the direct
-  `http://localhost:8000` port still works — `scripts/setup-prod.sh` turns it
+  `http://localhost:8000` port still works – `scripts/setup-prod.sh` turns it
   on). The payload is signed & tamper-evident, not encrypted.
 - Session fixation: `POST /login` clears the session before storing the user,
   so a pre-login cookie value cannot be carried into the authenticated
@@ -531,7 +537,7 @@ SECURITY:
   management, settings writes, logo upload, customer DSGVO export/anonymize,
   audit log, backup list/download/restore).
 - Brute-force protection: login lockout after 5 failed attempts per
-  (client IP, username) for 5 minutes, in-memory only (`auth.py`) — resets on
+  (client IP, username) for 5 minutes, in-memory only (`auth.py`) – resets on
   app restart and is not shared across multiple web replicas.
 - Input validation: Pydantic schemas (`schemas.py`) validate all request
   bodies (string lengths, numeric ranges, required fields).
@@ -588,8 +594,8 @@ LOGGING & ERROR HANDLING:
 `logging_setup.py` replaces the default uvicorn text output with one JSON
 object per line (`ts`, `level`, `logger`, `request_id`, `message`, plus any
 `extra={"fields": {...}}`), so `docker compose logs` is machine-readable.
-Every request gets a request ID — an incoming `X-Request-ID` from the proxy is
-reused, otherwise one is generated — which is echoed in the response header,
+Every request gets a request ID – an incoming `X-Request-ID` from the proxy is
+reused, otherwise one is generated – which is echoed in the response header,
 carried in a `ContextVar` into every log line of that request, and included in
 every error body. All errors (HTTP exceptions, Pydantic validation failures,
 and unhandled exceptions) are normalized to
@@ -607,7 +613,7 @@ the full list is returned as before, so existing callers are unaffected. The
 unpaginated total always comes back in the `X-Total-Count` response header.
 
 FRONTEND (backend/app/static/app.js):
-No framework and no build step — one script, loaded at the end of index.html,
+No framework and no build step – one script, loaded at the end of index.html,
 with the views as `<section>` elements that are shown/hidden. Three parts are
 worth knowing about:
 
@@ -625,11 +631,11 @@ worth knowing about:
   has finished loading.
 - Banners above the three document forms (edit lock, presence, restored
   draft) go through `showBanner()`/`hideBanner()`. They style themselves with
-  `display: flex`, which beats the browser's `[hidden] { display: none }` — the
+  `display: flex`, which beats the browser's `[hidden] { display: none }` – the
   `!important` rule at the end of `styles.css` is what keeps an empty banner
   from standing there as a coloured bar. Each carries a "✕" that
   files its current text in `dismissedBanners`, so the banner stays away until
-  it has something new to say — hiding the draft hint is not the same as
+  it has something new to say – hiding the draft hint is not the same as
   discarding the draft.
 - Draft cache: unsent input in the three document forms is written to
   `localStorage` under `rechnung.drafts.v1` (debounced 400 ms, plus a flush on
@@ -641,6 +647,33 @@ worth knowing about:
   delivery notes, customers, products, users and the audit log; only the
   invoice history searches server-side (`GET /api/invoices?search=`), because
   that list is the one that grows.
+
+RESPONSIVE NAVIGATION (burger menu):
+The nine core nav buttons (Dashboard through Artikel) sit in `.nav-primary`,
+a `flex-wrap: nowrap` row with `overflow-x: auto` – it never wraps to a
+second line; on a narrow window it scrolls sideways within itself instead,
+so the header is always exactly one line regardless of viewport width or how
+many buttons are visible for the current user. The five admin-only buttons
+(Firma, Benutzer, Audit-Log, Backup, Monitoring) moved out of the bar
+entirely into `#nav-more-menu`, a popover behind the `#nav-more-toggle` "☰"
+button (same show/hide/click-outside/Escape pattern as the customer-import
+example-file menu – `toggleNavMoreMenu()`, mirroring `toggleExampleMenu()`).
+The toggle button itself is hidden for non-admins, same as the five buttons
+it opens. Moving a button into the popover doesn't touch its `id`, so the
+existing `for (const n of Object.keys(views))` wiring loop that binds
+`#nav-{view}` clicks to `show(view)` finds it exactly as before, regardless
+of where in the DOM it now lives.
+
+MOBILE LAYOUT:
+The four line-item tables (invoice/quote/delivery-note/credit-note forms)
+were the one thing on the page not wrapped in `.table-scroll` – on a phone
+they forced the whole page to scroll sideways while every list view (already
+wrapped) stayed put, so a "fresh" invoice form and, say, the customer list
+felt like different-sized pages. All four now sit in their own
+`.table-scroll` container like the rest. `.grid` (the two-column field
+layout used throughout the forms) collapses to one column, and `header`/
+`main`/`section` padding shrinks, under a `max-width: 600px` media query
+(the same breakpoint the customer-picker layout already used).
 
 The `fetch` wrapper at the top of the file attaches the `X-CSRF-Token` header
 to every non-safe request, redirects to `/login` on 401, and reloads once on a
@@ -663,7 +696,7 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 95 frontend tests that load the real
+`backend/tests/frontend/` holds 102 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the sample-file and
 mass-export downloads (CSV/JSON), the customer/product import, the post-save
@@ -682,12 +715,12 @@ image build that asserts the container's UID is not 0 and that
 EMAIL:
 `email_service.py` sends via `smtplib` to `SMTP_HOST`/`SMTP_PORT` from
 config (defaults to the bundled MailHog container, unauthenticated, no
-TLS — dev/test only). Setting `SMTP_USE_TLS=true` plus `SMTP_USER`/
+TLS – dev/test only). Setting `SMTP_USE_TLS=true` plus `SMTP_USER`/
 `SMTP_PASSWORD` (e.g. via `scripts/setup-prod.sh`) switches to STARTTLS with
 login for real delivery. Five message types are generated: invoice email,
 quote email, delivery-note email, payment reminder, and payment confirmation.
 The confirmation is sent by `main._confirm_payment_if_settled()` whenever an
-invoice moves into "bezahlt" — both via `POST /api/invoices/{id}/payment` and
+invoice moves into "bezahlt" – both via `POST /api/invoices/{id}/payment` and
 via `PATCH /api/invoices/{id}/status`, which previously stayed silent. It
 fires only on the transition (never twice for an already-paid invoice) and is
 best effort: a failing SMTP server is logged but never breaks the payment or
@@ -697,7 +730,7 @@ PDF GENERATION:
 `pdf.py` builds invoice, quote, and delivery-note PDFs with ReportLab (or
 hands them to `pdf_form.py` for the "formular" layout),
 including company letterhead/logo, item table, tax/discount/skonto
-breakdown, and — for invoices with a valid IBAN — a GiroCode/EPC-QR payment
+breakdown, and – for invoices with a valid IBAN – a GiroCode/EPC-QR payment
 code generated with the `qrcode` library.
 
 BACKUP:
@@ -708,7 +741,7 @@ BACKUP:
 - The `web` container mounts `./backups` read-only and exposes it to admins
   via `/api/admin/backups` (list), `/api/admin/backups/{name}/download`, and
   `/api/admin/backups/{name}/restore`. Restore shells out to
-  `gunzip -c <file> | psql "$DATABASE_URL"`, which overwrites current data —
+  `gunzip -c <file> | psql "$DATABASE_URL"`, which overwrites current data –
   the frontend requires two confirmation dialogs before calling it, and every
   restore attempt (and download) is written to the audit log.
 - Manual backup: `docker exec -t rechnung_db pg_dump -U <user> -F c -b -v -f backup.dump <db>`

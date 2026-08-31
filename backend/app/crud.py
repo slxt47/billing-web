@@ -1120,6 +1120,38 @@ def set_default_pdf_template(db: Session, tpl: models.PdfTemplate) -> models.Pdf
     return tpl
 
 
+# Zwei fertige Vorlagen mit dem Standard-Layout, in Farbe und Schrift bewusst
+# unterschiedlich, damit eine frische Installation nicht nur eine einzige
+# Vorlage zur Auswahl hat. "Klassisch Blau" entspricht pdf.DEFAULTS – dem
+# bisherigen festverdrahteten Aussehen – und wird dadurch bei einer leeren
+# Tabelle automatisch die Vorgabe (create_pdf_template: die erste zählt).
+_BUILTIN_STANDARD_TEMPLATES = [
+    schemas.PdfTemplateIn(
+        name="Klassisch Blau", layout="standard",
+        accent_color="#2d6cdf", header_color="#2d3748",
+        font_family="Helvetica", font_size=10,
+        header_note="", footer_text="", show_logo=True, show_qr=True,
+    ),
+    schemas.PdfTemplateIn(
+        name="Modern Dunkel", layout="standard",
+        accent_color="#0f766e", header_color="#111827",
+        font_family="Times", font_size=10,
+        header_note="", footer_text="", show_logo=True, show_qr=True,
+    ),
+]
+
+
+def _seed_standard_templates(db: Session) -> None:
+    """Legt die beiden Standard-Layout-Vorlagen an, sofern noch keine Vorlage
+    mit demselben Namen existiert – wer eine schon umbenannt oder gelöscht
+    hat, bekommt also keine zweite hinterhergeschoben, außer der Name ist
+    wieder frei."""
+    for data in _BUILTIN_STANDARD_TEMPLATES:
+        if get_pdf_template_by_name(db, data.name):
+            continue
+        create_pdf_template(db, data)
+
+
 # Der Firmenvordruck ist der Grund, warum es das Layout "formular" gibt.
 # Damit er unter "PDF-Vorlagen" und in der Auswahl beim Beleg auftaucht, legt
 # der Start eine fertige Vorlage dafür an, statt sie jedem von Hand
@@ -1127,7 +1159,7 @@ def set_default_pdf_template(db: Session, tpl: models.PdfTemplate) -> models.Pdf
 FORM_TEMPLATE_NAME = "Mechatronik Neubauer e.U."
 
 
-def seed_pdf_templates(db: Session) -> None:
+def _seed_form_template(db: Session) -> None:
     """Beim Start: sorgt dafür, dass es eine Vordruck-Vorlage gibt.
 
     Nur, wenn noch keine Vorlage mit dem Layout "formular" existiert – wer
@@ -1156,6 +1188,17 @@ def seed_pdf_templates(db: Session) -> None:
         show_logo=True,
         show_qr=False,
     ))
+
+
+def seed_pdf_templates(db: Session) -> None:
+    """Beim Start: sorgt dafür, dass mindestens drei Vorlagen zur Auswahl
+    stehen, statt dass jede erst von Hand angelegt werden muss – zwei mit
+    dem Standard-Layout in unterschiedlicher Farb- und Schriftwahl, dazu die
+    Vordruck-Vorlage. Jede der drei prüft für sich, ob sie schon existiert
+    (siehe _seed_standard_templates/_seed_form_template), eine bestehende
+    Installation bekommt also nichts doppelt."""
+    _seed_standard_templates(db)
+    _seed_form_template(db)
 
 
 def delete_pdf_template(db: Session, tpl: models.PdfTemplate) -> None:

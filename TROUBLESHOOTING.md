@@ -22,7 +22,7 @@ docker compose logs web | grep 9a23489ad116
 
 ## Anmeldung
 
-### „Benutzername oder Passwort falsch", obwohl beides stimmt
+### „Benutzername oder Passwort falsch“, obwohl beides stimmt
 Die Zugangsdaten aus `.env` (`ADMIN_USER`, `ADMIN_PASSWORD`, `APP_USERS`)
 werden **nur beim allerersten Start** in die Datenbank übernommen
 (`crud.seed_users` legt nur an, wenn die Tabelle `users` leer ist). Wer die
@@ -30,11 +30,11 @@ werden **nur beim allerersten Start** in die Datenbank übernommen
 
 ```bash
 # Passwort eines Benutzers zurücksetzen (als Admin in der Oberfläche:
-# Reiter „Benutzer" → 🔑). Ohne Admin-Zugang bleibt nur der Neuaufbau der DB:
+# Reiter „Benutzer“ -> 🔑). Ohne Admin-Zugang bleibt nur der Neuaufbau der DB:
 docker compose down -v && docker compose up -d --build   # ACHTUNG: löscht alle Daten
 ```
 
-### „Zu viele Fehlversuche. Bitte in ca. X Minuten erneut versuchen."
+### „Zu viele Fehlversuche. Bitte in ca. X Minuten erneut versuchen.“
 Brute-Force-Schutz: 5 Fehlversuche je (IP + Benutzername) sperren für 5
 Minuten. Die Sperre liegt nur im Arbeitsspeicher – ein Neustart des
 `web`-Containers hebt sie sofort auf:
@@ -43,17 +43,17 @@ Minuten. Die Sperre liegt nur im Arbeitsspeicher – ein Neustart des
 docker compose restart web
 ```
 
-### „Die Sitzung ist abgelaufen. Bitte erneut anmelden." (`/login?csrf=1`)
+### „Die Sitzung ist abgelaufen. Bitte erneut anmelden.“ (`/login?csrf=1`)
 Das CSRF-Token aus dem Formular passt nicht zur Sitzung. Übliche Ursachen:
 
 * Die Login-Seite lag lange offen und die Sitzung ist abgelaufen
-  (`SESSION_MAX_AGE`, Standard 12 Stunden) → einfach neu laden.
+  (`SESSION_MAX_AGE`, Standard 12 Stunden) -> einfach neu laden.
 * `SESSION_HTTPS_ONLY=true`, aber der Zugriff erfolgt über **http**. Dann
   schickt der Browser das Cookie nicht mit. Entweder https benutzen oder für
   eine reine Testumgebung `SESSION_HTTPS_ONLY=false` setzen.
 * Cookies sind im Browser blockiert.
 
-### Login funktioniert, aber jede Aktion meldet 403 „CSRF-Token fehlt"
+### Login funktioniert, aber jede Aktion meldet 403 „CSRF-Token fehlt“
 Das Frontend liest das Token aus dem Cookie `csrftoken`. Fehlt das Cookie,
 läuft der Zugriff meist über einen Proxy, der Cookies verschluckt, oder die
 Seite wurde aus dem Cache geladen. Einmal hart neu laden (Strg+Shift+R). Zum
@@ -66,7 +66,7 @@ echo "CSRF_ENABLED=false" >> .env && docker compose up -d web
 
 ### Nach dem Login sofort wieder auf der Login-Seite
 `SESSION_SECRET` ändert sich bei jedem Start (z. B. weil die Variable nicht
-gesetzt ist und ein Zufallswert verwendet wird) → alle Sitzungs-Cookies
+gesetzt ist und ein Zufallswert verwendet wird) -> alle Sitzungs-Cookies
 werden ungültig. Einen festen Wert in `.env` hinterlegen:
 
 ```bash
@@ -77,7 +77,7 @@ grep SESSION_SECRET .env    # muss einen festen, langen Wert enthalten
 
 ## HTTP-Fehler
 
-### 429 „Zu viele Anfragen"
+### 429 „Zu viele Anfragen“
 Das Rate-Limit greift (Standard: 600 Requests je IP und Minute, für
 `POST /login` 20 je 5 Minuten). Hinter einem Proxy, der **kein**
 `X-Forwarded-For` setzt, zählen alle Benutzer auf dieselbe IP – dann entweder
@@ -91,7 +91,7 @@ RATE_LIMIT_WINDOW=60
 # 0 schaltet das Limit ganz ab
 ```
 
-### 409 „Wird gerade von … bearbeitet"
+### 409 „Wird gerade von … bearbeitet“
 Die Bearbeitungssperre eines Belegs – gilt für Rechnungen, Angebote und
 Lieferscheine gleichermaßen. Sie läuft 5 Minuten nach der letzten Aktivität
 automatisch ab. Wer den Tab einfach schließt, hält sie also höchstens
@@ -105,21 +105,21 @@ docker exec -it rechnung_db psql -U rechnung -d rechnung \
 # oder einen Lieferschein: UPDATE delivery_notes SET locked_by = NULL, ... WHERE number = 'LS-...'
 ```
 
-### 500 „Interner Serverfehler"
+### 500 „Interner Serverfehler“
 Die Antwort enthält eine `request_id`. Damit den Traceback im Log suchen:
 
 ```bash
 docker compose logs web | grep '"level": "ERROR"' | tail -5
 ```
 
-### 502 „E-Mail konnte nicht gesendet werden"
+### 502 „E-Mail konnte nicht gesendet werden“
 Siehe Abschnitt *E-Mail*.
 
 ---
 
 ## Oberfläche / Browser
 
-### Seite bleibt weiß, in der Konsole steht „Refused to execute inline script"
+### Seite bleibt weiß, in der Konsole steht „Refused to execute inline script“
 Die Content-Security-Policy erlaubt keine Inline-Skripte und keine
 Inline-Styles. Wer die Oberfläche erweitert, muss JavaScript in eine Datei
 unter `backend/app/static/` auslegen und Styles über CSS-Klassen bzw.
@@ -135,13 +135,13 @@ also weiterhin den alten Stand:
 docker compose up -d --build web
 ```
 
-### „Wiederhergestellt: nicht gespeicherte Eingaben vom …" – wie werde ich das los?
+### „Wiederhergestellt: nicht gespeicherte Eingaben vom …“ – wie werde ich das los?
 Das ist der Entwurfs-Zwischenspeicher: nicht abgeschickte Formulareingaben
-überstehen ein Neuladen. Der Knopf **„Entwurf verwerfen"** neben dem Hinweis
+überstehen ein Neuladen. Der Knopf **„Entwurf verwerfen“** neben dem Hinweis
 leert Formular und Speicher. Entwürfe liegen ausschließlich im Browser
 (`localStorage`, Schlüssel `rechnung.drafts.v1`) und verfallen nach 7 Tagen.
 
-### „👀 anna hat diesen Beleg gerade ebenfalls geöffnet" – stimmt das noch?
+### „👀 anna hat diesen Beleg gerade ebenfalls geöffnet“ – stimmt das noch?
 Die Anzeige beruht auf einem Lebenszeichen alle 10 Sekunden. Wer den Tab hart
 schließt, verschwindet erst nach 45 Sekunden aus der Anzeige. Bleibt ein
 Eintrag darüber hinaus stehen, hat der Browser noch eine offene Seite (z. B.
@@ -157,14 +157,14 @@ leeren (`DELETE FROM presence;`).
 
 ### Der gespeicherte Kunde taucht in der Auswahl nicht auf
 In der Auswahlliste stehen nur **aktive** Kunden. Deaktivierte Kunden
-erscheinen weiter im Reiter „Kunden" (Filter „nur inaktive") und lassen sich
+erscheinen weiter im Reiter „Kunden“ (Filter „nur inaktive“) und lassen sich
 dort mit ▶️ wieder aktivieren.
 
 ---
 
 ## Container & Datenbank
 
-### `web` startet nicht: „connection to server at "db" … failed"
+### `web` startet nicht: „connection to server at "db" … failed“
 Die Datenbank war noch nicht bereit. `init_db()` wartet 10 × 2 Sekunden;
 dauert der DB-Start länger, hilft ein Neustart:
 
@@ -232,7 +232,7 @@ http://localhost:8025      (oder http://mail.localhost über den Proxy)
 Für echten Versand `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` und
 `SMTP_USE_TLS=true` setzen – `scripts/setup-prod.sh` fragt das ab.
 
-### 502 „E-Mail konnte nicht gesendet werden: …"
+### 502 „E-Mail konnte nicht gesendet werden: …“
 Der SMTP-Server war nicht erreichbar oder hat die Anmeldung abgelehnt. Die
 Originalmeldung steht in der Antwort und im Log. Von Hand testen:
 
@@ -245,7 +245,7 @@ s.ehlo(); print(s.esmtp_features); s.quit()"
 
 Wichtig: Ein fehlgeschlagener Versand verhindert **nie** das Speichern eines
 Belegs – die automatische Mail beim Anlegen einer Rechnung ist bewusst
-„best effort".
+„best effort“.
 
 ---
 

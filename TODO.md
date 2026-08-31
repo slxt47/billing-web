@@ -200,6 +200,15 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     („Mechatronik Neubauer e.U.“) legt der Start an (crud.seed_pdf_templates),
     solange es keine Vordruck-Vorlage gibt – sonst müsste sie jeder erst von
     Hand anlegen, um den Vordruck überhaupt wählen zu können.
+[X] Drei fertige PDF-Vorlagen statt einer stehen ab dem ersten Start zur
+    Auswahl (crud.seed_pdf_templates -> _seed_standard_templates/
+    _seed_form_template): „Klassisch Blau“ (Standard-Layout, Farben/Schrift
+    wie das bisherige feste Aussehen, wird bei leerer Tabelle automatisch die
+    Vorgabe), „Modern Dunkel“ (Standard-Layout, andere Akzent-/Kopffarbe und
+    Schrift) und der bereits bestehende Vordruck „Mechatronik Neubauer e.U.“.
+    Jede der drei prüft für sich per Namen, ob sie schon existiert, bevor sie
+    angelegt wird – umbenannte oder gelöschte Vorlagen bekommen also keine
+    zweite hinterhergeschoben.
 
 
 
@@ -375,27 +384,87 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 --------------------------------------------------------------------------------
 9. IDEEN / NOCH NICHT EINGEPLANT
 --------------------------------------------------------------------------------
-[X] Feldweises Zusammenführen oder eine echte Sperre für Angebote und
-    Lieferscheine: echte Sperre statt Zusammenführen – dieselbe
-    Bearbeitungssperre wie bei Rechnungen (Abschnitt 2), nur eben auch für
-    Angebot und Lieferschein. Quote und DeliveryNote tragen jetzt dieselben
-    zwei Spalten locked_by/locked_at wie Invoice; crud.py-Funktionen
-    (acquire_lock/release_lock/lock_status) sind dafür generisch über einen
-    Lockable-Typ (Invoice | Quote | DeliveryNote) statt Invoice-spezifisch.
-    Neue Routen GET/POST/DELETE /api/quotes/{id}/lock und
-    .../delivery-notes/{id}/lock, PUT prüft die Sperre wie bei der Rechnung
-    (409 „wird gerade von … bearbeitet“). Frontend: „bearbeiten“ holt vorher
-    die Sperre, bei „editable: false“ bricht es mit Hinweis ab statt das
-    Formular zu füllen; „Abbrechen“ und ein Wechsel in eine andere Ansicht
-    geben sie wieder frei. Feldweises Zusammenführen wurde bewusst nicht
-    gebaut – eine Sperre ist einfacher, konsistent mit Rechnungen, und die
-    Anwesenheitsanzeige zeigt ohnehin schon, wer gerade mitliest.
 Sonst ist hier nichts geparkt.
 
 
 --------------------------------------------------------------------------------
-10. CHANGELOG
+10. OBERFLÄCHE / RESPONSIVE DESIGN
 --------------------------------------------------------------------------------
+[X] Einheitliche Fenstergröße über alle Menüpunkte hinweg: die vier
+    Positionstabellen (Rechnung, Angebot, Lieferschein, Gutschrift) liefen
+    als einzige Tabellen der App nicht in einem eigenen Scrollbereich – auf
+    dem Handy zwang das die ganze Seite zum seitwärts Scrollen, während jede
+    Listenansicht (schon mit .table-scroll) an Ort und Stelle blieb, sich
+    also je nach Menüpunkt unterschiedlich groß anfühlte. Jetzt stecken alle
+    vier ebenfalls in .table-scroll, wie bei Kunden/Rechnungsübersicht/
+    Auswertungen und den anderen Listen schon länger üblich.
+[X] Menüleiste immer in einer Zeile (index.html: .nav-primary, styles.css):
+    flex-wrap: nowrap mit overflow-x: auto – die Leiste bricht nie mehr auf
+    eine zweite Zeile um, sondern scrollt auf schmalen Bildschirmen seitwärts
+    innerhalb sich selbst. Firma/Benutzer/Audit-Log/Backup/Monitoring (nur
+    Admin, im Alltagsgeschäft die selteneren Punkte) stehen nicht mehr fest
+    in der Leiste, sondern hinter einem Burger-Knopf (☰, #nav-more-toggle/
+    #nav-more-menu in app.js), demselben Auf-/Zu-/Escape-/Klick-daneben-
+    Muster wie beim Beispieldatei-Auswahlfenster im Kundenimport.
+[X] Handy-taugliches Layout: .grid (die zweispaltigen Formularfelder) bricht
+    unter 600px Breite auf eine Spalte um, Kopf-/Haupt-/Kartenpolster
+    schrumpft passend mit. Dazu etwas Barrierefreiheit nachgezogen:
+    Burger-Knopf und Hell-/Dunkel-Umschalter haben zusätzlich zum title
+    jetzt ein aria-label, das Burger-Menü ein role="menu". Der
+    viewport-Meta-Tag war schon vorhanden.
+
+
+--------------------------------------------------------------------------------
+11. TODO's
+--------------------------------------------------------------------------------
+Aktuell nichts Neues.
+
+
+--------------------------------------------------------------------------------
+12. CHANGELOG
+--------------------------------------------------------------------------------
+2026-08-31, elfter Durchgang
+  * Abschnitt 10 „TODO's“ (neu von dir angelegt) abgearbeitet und nach
+    WORKINSTRUCTIONS.md Punkt 5 in einen neuen Sachabschnitt einsortiert, der
+    dafür noch fehlte: 10. OBERFLÄCHE / RESPONSIVE DESIGN.
+  * Positionstabellen bei Rechnung/Angebot/Lieferschein/Gutschrift stecken
+    jetzt wie alle anderen Tabellen in .table-scroll – vorher lief nur diese
+    vier über den Kartenrand hinaus und zwang die ganze Seite zum seitwärts
+    Scrollen (Abschnitt 10).
+  * Menüleiste bricht nicht mehr um: die neun Kernpunkte scrollen bei Bedarf
+    seitwärts statt auf eine zweite Zeile zu wandern, die fünf
+    Admin-Verwaltungspunkte stehen jetzt hinter einem Burger-Knopf statt fest
+    in der Leiste (Abschnitt 10).
+  * .grid bricht unter 600px auf eine Spalte um, dazu aria-label für
+    Burger-Knopf/Hell-Dunkel-Umschalter und role="menu" fürs Burger-Menü
+    (Abschnitt 10).
+  * WORKINSTRUCTIONS.md neu geschrieben (klarere Sätze, „Punk 10“ zu „Abschnitt
+    10“ richtiggestellt, Abschnittsnummern bei Neueinsortierung mitgedacht).
+  * Teststand: 249 Backend- und 102 Frontend-Tests.
+
+2026-08-31, zehnter Durchgang
+  * Drei fertige PDF-Vorlagen statt einer ab dem ersten Start: „Klassisch
+    Blau“ und „Modern Dunkel“ (beide Standard-Layout, unterschiedliche Farben
+    und Schrift) zusätzlich zum bestehenden Vordruck „Mechatronik Neubauer
+    e.U.“ (Abschnitt 3). crud.seed_pdf_templates ruft dafür jetzt
+    _seed_standard_templates und _seed_form_template auf, jede Vorlage prüft
+    für sich per Namen, ob sie schon existiert.
+  * Zeichen, die kein Mensch so tippt, aus den Markdown-Dokumenten und
+    Code-Kommentaren entfernt: der Halbgeviertstrich `–` (der hier in dieser
+    Datei durchgehend verwendet wird) statt des im Deutschen unüblichen
+    Geviertstrichs `—`, `->` statt `→` außerhalb von Diagrammen, und ein paar
+    an der falschen Stelle mit einem geraden `"` statt `“` geschlossene
+    „…“-Anführungszeichen richtiggestellt. Betroffen waren vor allem
+    README.md und Technical_documentation.md; TODO.md war schon vorher
+    sauber und diente als Referenz für die menschliche Schreibweise.
+  * Abschnitt 9 („Ideen / noch nicht eingeplant“) aufgeräumt: die
+    Bearbeitungssperre für Angebot/Lieferschein stand dort und in Abschnitt 2
+    doppelt – jetzt nur noch in Abschnitt 2, wo sie hingehört. Neue Punkte
+    kommen ab jetzt wieder direkt in ihren Sachabschnitt statt zuerst hier
+    zu landen, wie es die Konvention oben ohnehin vorsieht.
+  * Teststand: 249 Backend- und 95 Frontend-Tests (zwei PDF-Vorlagen-Tests
+    an die jetzt drei Start-Vorlagen angepasst).
+
 2026-08-31, neunter Durchgang
   * Alle offenen Punkte bis auf Abschnitt 8 abgeschlossen:
   * Artikelimport (CSV/JSON) und CSV-Massenexport für Kunden UND Artikel

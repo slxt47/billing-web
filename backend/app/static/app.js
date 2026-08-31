@@ -136,6 +136,36 @@ for (const n of Object.keys(views)) {
   const btn = $(`#nav-${n}`);
   if (btn) btn.onclick = () => show(n);
 }
+
+// ---------------------- Burger-Menü (Verwaltungspunkte) ----------------------
+// Firma/Benutzer/Audit-Log/Backup/Monitoring stehen nicht mehr fest in der
+// Leiste, sondern hinter dem Burger-Knopf – sonst bricht die Menüzeile bei
+// jedem Admin-Login um. Derselbe Auf/Zu-Mechanismus wie beim
+// Beispieldatei-Auswahlfenster (siehe unten, #customer-import-example-menu).
+const navMoreToggle = $("#nav-more-toggle");
+const navMoreMenu = $("#nav-more-menu");
+
+function toggleNavMoreMenu(open) {
+  navMoreMenu.hidden = !open;
+  navMoreToggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+navMoreToggle.onclick = (e) => {
+  e.stopPropagation();
+  toggleNavMoreMenu(navMoreMenu.hidden);
+};
+// Ein Klick auf einen der Menüpunkte schließt das Fenster gleich mit.
+navMoreMenu.querySelectorAll("button[id]").forEach((btn) => {
+  btn.addEventListener("click", () => toggleNavMoreMenu(false));
+});
+document.addEventListener("click", (e) => {
+  if (!navMoreMenu.hidden && !navMoreMenu.contains(e.target) && e.target !== navMoreToggle) {
+    toggleNavMoreMenu(false);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !navMoreMenu.hidden) toggleNavMoreMenu(false);
+});
+
 // "Neue Rechnung" bricht eine laufende Bearbeitung ab (inkl. Sperre) und
 // beginnt mit einem leeren Formular. Ein noch nicht abgeschickter Entwurf für
 // eine NEUE Rechnung bleibt dagegen stehen – genau dafür ist er da; zum
@@ -261,7 +291,7 @@ function fillPicker(p) {
     if (!c.active || !customerMatches(c, q)) continue;
     const opt = document.createElement("option");
     opt.value = c.id;
-    opt.textContent = c.contact_person ? `${c.name} — ${c.contact_person}` : c.name;
+    opt.textContent = c.contact_person ? `${c.name} – ${c.contact_person}` : c.name;
     p.select.appendChild(opt);
     matches.push(c);
   }
@@ -2926,6 +2956,8 @@ async function loadCurrentUser() {
     $("#nav-audit").hidden = !currentIsAdmin;
     $("#nav-backup").hidden = !currentIsAdmin;
     $("#nav-monitoring").hidden = !currentIsAdmin;
+    // Ohne Admin-Rechte gibt es nichts, was das Burger-Menü zeigen könnte.
+    $("#nav-more-toggle").hidden = !currentIsAdmin;
   } catch (_) { /* fetch leitet bei 401 selbst um */ }
 }
 

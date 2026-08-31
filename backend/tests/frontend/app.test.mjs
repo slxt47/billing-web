@@ -174,7 +174,7 @@ test("Angebot und Lieferschein bieten dieselbe Kundenauswahl wie die Rechnung", 
     const labels = optionsOf(window, sel);
     assert.equal(labels[0], "– neuen Kunden eingeben –");
     assert.deepEqual(labels.slice(1),
-      ["Alpha AG — Frau Alpha", "Beta GmbH — Herr Beta"],
+      ["Alpha AG – Frau Alpha", "Beta GmbH – Herr Beta"],
       `${sel}: nur aktive Kunden, mit Ansprechpartner`);
   }
 });
@@ -234,7 +234,7 @@ test("Das Suchfeld filtert die Kundenauswahl", async () => {
   const search = window.document.querySelector("#quote-customer-search");
   search.value = "beta";
   fire(search);
-  assert.deepEqual(optionsOf(window, "#quote-customer-select").slice(1), ["Beta GmbH — Herr Beta"]);
+  assert.deepEqual(optionsOf(window, "#quote-customer-select").slice(1), ["Beta GmbH – Herr Beta"]);
 
   search.value = "kontakt@beta";        // findet auch über die E-Mail
   fire(search);
@@ -1324,6 +1324,97 @@ test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async (
   // Kein Admin -> Monitoring ist ausgeblendet, Gutschriften sind für alle da.
   assert.equal(window.document.querySelector("#nav-credit").hidden, false);
   assert.equal(window.document.querySelector("#nav-reports").hidden, false);
+});
+
+// -------------------------------- Burger-Menü (Verwaltungspunkte)
+test("Ohne Admin-Rechte bleibt der Burger-Knopf verborgen", async () => {
+  const { window } = startApp({
+    routes: { "/api/me": { user: "tester", is_admin: false, csrf_token: "t" } },
+  });
+  await settle();
+  assert.equal(window.document.querySelector("#nav-more-toggle").hidden, true);
+});
+
+test("Als Admin öffnet der Burger-Knopf die Verwaltungspunkte", async () => {
+  const { window } = startApp();
+  await settle();
+
+  const toggle = window.document.querySelector("#nav-more-toggle");
+  assert.equal(toggle.hidden, false);
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, true);
+
+  toggle.click();
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+
+  // Firma/Benutzer/Audit-Log/Backup/Monitoring stehen im Menü, nicht mehr
+  // fest in der Kernleiste.
+  const menu = window.document.querySelector("#nav-more-menu");
+  for (const id of ["nav-settings", "nav-users", "nav-audit", "nav-backup", "nav-monitoring"]) {
+    assert.ok(menu.querySelector(`#${id}`), `${id} steht im Burger-Menü`);
+    assert.ok(!window.document.querySelector("#nav-primary").querySelector(`#${id}`),
+              `${id} steht nicht mehr in der Kernleiste`);
+  }
+});
+
+test("Ein Klick auf einen Menüpunkt schließt das Burger-Menü", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-more-toggle").click();
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, false);
+
+  window.document.querySelector("#nav-audit").click();
+  await settle(20);
+
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, true);
+  assert.equal(window.document.querySelector("#view-audit").hidden, false);
+});
+
+test("Ein Klick daneben schließt das Burger-Menü", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-more-toggle").click();
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, false);
+
+  window.document.querySelector("h1").click();
+
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, true);
+});
+
+test("Escape schließt das Burger-Menü", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-more-toggle").click();
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, false);
+
+  window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+
+  assert.equal(window.document.querySelector("#nav-more-menu").hidden, true);
+});
+
+test("Die Kernpunkte stehen weiterhin in der Menüleiste, nicht im Burger-Menü", async () => {
+  const { window } = startApp();
+  await settle();
+  const primary = window.document.querySelector("#nav-primary");
+  for (const id of ["nav-dashboard", "nav-new", "nav-quotes", "nav-delivery",
+                    "nav-history", "nav-credit", "nav-reports", "nav-customers",
+                    "nav-products"]) {
+    assert.ok(primary.querySelector(`#${id}`), `${id} steht in der Kernleiste`);
+  }
+});
+
+// -------------------------------- Positionstabellen scrollen seitwärts
+test("Jede Positionstabelle sitzt in einem eigenen Scrollbereich", () => {
+  // Bei Rechnung, Angebot, Lieferschein und Gutschrift lief die
+  // Positionstabelle bisher über den Kartenrand hinaus statt seitwärts zu
+  // scrollen, anders als alle Listenansichten (Kunden, Rechnungsübersicht, …).
+  const dom = new JSDOM(HTML, { pretendToBeVisual: true });
+  openWindows.push(dom.window);
+  for (const id of ["items-table", "quote-items-table",
+                    "delivery-items-table", "credit-items-table"]) {
+    const table = dom.window.document.querySelector(`#${id}`);
+    assert.ok(table.closest(".table-scroll"), `#${id} steht in .table-scroll`);
+  }
 });
 
 // -------------------------------- PDF-Vorlagen

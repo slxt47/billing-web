@@ -1,6 +1,6 @@
 # 🧾 Rechnungs-App
 
-Eine Web-Applikation zum Schreiben von Rechnungen, Angeboten und Lieferscheinen —
+Eine Web-Applikation zum Schreiben von Rechnungen, Angeboten und Lieferscheinen –
 komplett in Docker-Containern, mit PostgreSQL-Datenbank, Rechnungsübersicht, PDF-Download,
 E-Mail-Versand und DSGVO-Funktionen.
 
@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (249 Backend- + 95 Frontend-Tests) with CI are
+and an automated test suite (249 Backend- + 102 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
@@ -26,54 +26,54 @@ code and `TODO.md` first.
 ## Funktionen
 
 ### Rechnungen
-- **Rechnungen erstellen** — Kunde, Adresse, Ansprechpartner, Positionen, MwSt., Hinweise;
+- **Rechnungen erstellen** – Kunde, Adresse, Ansprechpartner, Positionen, MwSt., Hinweise;
   Summen werden live berechnet, Rechnungsnummern (`RE-<Jahr>-0001`) automatisch vergeben
   (kollisionsfrei über einen PostgreSQL-Advisory-Lock, auch bei gleichzeitigen Benutzern).
   Das **Rechnungsdatum ist immer der heutige Tag**.
-- **Nach dem Speichern in die Rechnungsübersicht** — ob neu angelegt oder
+- **Nach dem Speichern in die Rechnungsübersicht** – ob neu angelegt oder
   fertig bearbeitet: nach dem Speichern wechselt die App in die
   Rechnungsübersicht und bestätigt dort die Nummer.
-- **Rechnungen bearbeiten** — bestehende, nicht stornierte Rechnungen können nachträglich
+- **Rechnungen bearbeiten** – bestehende, nicht stornierte Rechnungen können nachträglich
   geändert werden. Eine **Bearbeitungssperre** verhindert, dass zwei Benutzer gleichzeitig
   dieselbe Rechnung bearbeiten (läuft nach 5 Minuten Inaktivität automatisch ab).
 - **Standard-MwSt. 20 %** voreingestellt; Datumsanzeige im Format `TT/MM/JJJJ`.
-- **Skonto** — pro Rechnung bei Bedarf ein Skonto („X % bei Zahlung innerhalb Y
-  Tagen"); erscheint mit Frist, Betrag und reduziertem Zahlbetrag auf dem PDF.
-- **Rabatt & Kleinunternehmer** — Rabatt in % auf die Zwischensumme; §19-UStG-Modus
+- **Skonto** – pro Rechnung bei Bedarf ein Skonto („X % bei Zahlung innerhalb Y
+  Tagen“); erscheint mit Frist, Betrag und reduziertem Zahlbetrag auf dem PDF.
+- **Rabatt & Kleinunternehmer** – Rabatt in % auf die Zwischensumme; §19-UStG-Modus
   ohne MwSt.
-- **Zahlungen** — Zahlungseingänge (auch Teilzahlungen) erfassen; Status wird
+- **Zahlungen** – Zahlungseingänge (auch Teilzahlungen) erfassen; Status wird
   automatisch *teilbezahlt*/*bezahlt*; offener Betrag wird ausgewiesen. Bei
   vollständiger Zahlung per Zahlungserfassung wird automatisch eine
   Zahlungsbestätigung per E-Mail verschickt (falls der Kunde eine E-Mail-Adresse hat).
-- **Rückfunktion / Storno** — Rechnung stornieren und per „zurück" wieder auf
+- **Rückfunktion / Storno** – Rechnung stornieren und per „zurück“ wieder auf
   *offen* setzen; als *bezahlt* markieren; endgültig löschen.
-- **Mahnwesen** — überfällige Rechnungen werden erkannt und farblich markiert;
+- **Mahnwesen** – überfällige Rechnungen werden erkannt und farblich markiert;
   Zahlungserinnerung per E-Mail versendbar.
-- **PDF-Download** — jede Rechnung als PDF herunterladen (inkl. GiroCode/EPC-QR).
-- **E-Mail-Versand** — Rechnung als PDF per E-Mail verschicken, optional automatisch
+- **PDF-Download** – jede Rechnung als PDF herunterladen (inkl. GiroCode/EPC-QR).
+- **E-Mail-Versand** – Rechnung als PDF per E-Mail verschicken, optional automatisch
   direkt beim Anlegen (`auto_email`).
-- **Monats-Export** — alle Rechnungen eines Monats als ZIP (je ein PDF plus eine
+- **Monats-Export** – alle Rechnungen eines Monats als ZIP (je ein PDF plus eine
   CSV-Übersicht) herunterladen.
 
 ### Angebote & Lieferscheine
-- **Angebote (Quotes)** — eigener Belegtyp (`AN-<Jahr>-0001`) mit Positionen, MwSt.,
+- **Angebote (Quotes)** – eigener Belegtyp (`AN-<Jahr>-0001`) mit Positionen, MwSt.,
   Rabatt, Gültigkeitsdatum und Status (offen/angenommen/abgelehnt/umgewandelt); als
   PDF herunterladen oder per E-Mail verschicken.
-- **Angebot → Rechnung** — ein Angebot lässt sich mit einem Klick in eine Rechnung
+- **Angebot -> Rechnung** – ein Angebot lässt sich mit einem Klick in eine Rechnung
   umwandeln; die laufende Belegnummer wird dabei weitergereicht (z. B. `AN-2026-0007`
-  → `RE-2026-0007`). Danach landet man direkt in der Rechnungsübersicht, in der die
+  -> `RE-2026-0007`). Danach landet man direkt in der Rechnungsübersicht, in der die
   neue Rechnung schon steht.
-- **Lieferscheine** — reiner Liefernachweis (Beschreibung + Menge, ohne Preise),
-  frei anlegbar oder direkt aus einer Rechnung erzeugt (`RE-2026-0007` →
+- **Lieferscheine** – reiner Liefernachweis (Beschreibung + Menge, ohne Preise),
+  frei anlegbar oder direkt aus einer Rechnung erzeugt (`RE-2026-0007` ->
   `LS-2026-0007`); als PDF herunterladen oder per E-Mail verschicken.
   Status: *offen*, *abgeschlossen* (grün) oder *storniert*. **Der PDF-Download
-  schließt einen offenen Lieferschein ab** — wer ihn ausdruckt, gibt ihn aus der
-  Hand. „wieder öffnen" setzt ihn bei Bedarf zurück auf *offen*; ein stornierter
+  schließt einen offenen Lieferschein ab** – wer ihn ausdruckt, gibt ihn aus der
+  Hand. „wieder öffnen“ setzt ihn bei Bedarf zurück auf *offen*; ein stornierter
   bleibt storniert. Aus einem
-  Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot"): Menge
+  Lieferschein lässt sich außerdem ein **Angebot** machen („zu Angebot“): Menge
   und Beschreibung kommen aus der Lieferung, die Preise – soweit die Position im
   Artikelstamm steht – aus den Standardpreisen, sonst 0 zum Nachtragen.
-- **Keine doppelten Umwandlungen** — jeder Beleg lässt sich nur einmal
+- **Keine doppelten Umwandlungen** – jeder Beleg lässt sich nur einmal
   umwandeln: aus einem Angebot entsteht genau eine Rechnung, aus einer
   Rechnung genau ein Lieferschein, aus einem Lieferschein genau ein Angebot.
   Gibt es den Folgebeleg schon, steht in der Liste statt des Knopfes dessen
@@ -82,61 +82,61 @@ code and `TODO.md` first.
   gelöscht, ist die Umwandlung wieder möglich.
 - Angebote, Rechnungen und Lieferscheine teilen sich **eine fortlaufende
   Belegnummer pro Jahr**, damit eine Umwandlung die Nummer sauber weiterschiebt.
-- **Bearbeitungssperre** — wie bei Rechnungen: solange jemand ein Angebot oder
+- **Bearbeitungssperre** – wie bei Rechnungen: solange jemand ein Angebot oder
   einen Lieferschein bearbeitet, ist es für andere Benutzer gesperrt (läuft
   nach 5 Minuten Inaktivität automatisch ab); ein zweiter Versuch bricht mit
   Hinweis ab, statt das Formular zu füllen.
 
 ### Gutschriften
-- **Gutschriften (Credit Notes)** — eigene Belegart (`GS-<Jahr>-0001`) mit
+- **Gutschriften (Credit Notes)** – eigene Belegart (`GS-<Jahr>-0001`) mit
   Positionen, MwSt., Grund, PDF und E-Mail-Versand; sie teilt sich den
   fortlaufenden Nummernkreis mit Angebot, Rechnung und Lieferschein.
-- **Voll- oder Teilgutschrift** — „Gutschrift" in der Rechnungsübersicht
+- **Voll- oder Teilgutschrift** – „Gutschrift“ in der Rechnungsübersicht
   übernimmt Kunde und Positionen der Rechnung (Rabatt eingerechnet); einzelne
   Zeilen lassen sich streichen oder ändern, dann wird nur der Rest
   gutgeschrieben. Mehrere Gutschriften je Rechnung sind möglich, zusammen
-  aber höchstens der offene Betrag — mehr weist die API ab.
-- **Wirkung auf die Rechnung** — eine Gutschrift senkt den offenen Betrag
+  aber höchstens der offene Betrag – mehr weist die API ab.
+- **Wirkung auf die Rechnung** – eine Gutschrift senkt den offenen Betrag
   (`remaining = Gesamt − Zahlungen − Gutschriften`) und den Umsatz im
   Dashboard. Der Rechnungsstatus wird dabei bewusst nicht automatisch auf
-  „bezahlt" gedreht: gutgeschrieben ist nicht dasselbe wie bezahlt.
-- **Status** — *offen*, *erstattet* oder *storniert*; eine stornierte
+  „bezahlt“ gedreht: gutgeschrieben ist nicht dasselbe wie bezahlt.
+- **Status** – *offen*, *erstattet* oder *storniert*; eine stornierte
   Gutschrift zählt nirgends mehr mit.
 
 ### Auswertungen
-- **Umsatzsteuer (UStVA-Grundlage)** — Netto, Umsatzsteuer und Brutto je
+- **Umsatzsteuer (UStVA-Grundlage)** – Netto, Umsatzsteuer und Brutto je
   Steuersatz für einen frei wählbaren Zeitraum, Gutschriften abgezogen,
   stornierte Belege ausgenommen; Kleinunternehmer landen im 0-%-Topf.
   Gerechnet wird nach Rechnungsdatum (Soll-Versteuerung).
-- **Erlöse** — Kennzahlen (Erlös netto/brutto, Gutschriften, bezahlt, offen)
+- **Erlöse** – Kennzahlen (Erlös netto/brutto, Gutschriften, bezahlt, offen)
   sowie Aufstellungen je Monat und je Kunde.
-- **CSV-Export** — beide Auswertungen als CSV (Semikolon, deutsche
+- **CSV-Export** – beide Auswertungen als CSV (Semikolon, deutsche
   Dezimalkommas, BOM für Excel).
-- **Freier Report-Builder** — Belegart frei wählbar (Rechnungen, Angebote,
+- **Freier Report-Builder** – Belegart frei wählbar (Rechnungen, Angebote,
   Lieferscheine, Gutschriften), derselbe Zeitraum wie oben, optionaler
   Statusfilter, Gruppierung nach nichts (Belegliste), Kunde, Monat oder
   Status, ebenfalls mit CSV-Export. Anders als UStVA und Erlöse blendet er
-  nichts von sich aus aus — auch stornierte Belege zählen mit, sofern nicht
+  nichts von sich aus aus – auch stornierte Belege zählen mit, sofern nicht
   über den Statusfilter ausgeschlossen. Lieferscheine kennen keine Preise,
   dort stehen nur Anzahl und Positionen.
-- ⚠️ **Nur die Erlösseite** — Ausgaben erfasst die App nicht, eine
+- ⚠️ **Nur die Erlösseite** – Ausgaben erfasst die App nicht, eine
   vollständige Gewinn-und-Verlust-Rechnung ist damit nicht möglich. Aus
   demselben Grund weist die UStVA-Auswertung keine Vorsteuer aus.
 
 ### Kunden & Artikel
-- **Stammkunden** — häufige Kunden mit Anschrift, Ansprechpartner, E-Mail,
+- **Stammkunden** – häufige Kunden mit Anschrift, Ansprechpartner, E-Mail,
   **Standard-Zahlungsfrist** und optionaler **Skonto-Vorgabe** anlegen und bearbeiten;
   bei Auswahl werden Fälligkeitsdatum und Skonto automatisch gesetzt.
-- **Artikel/Leistungen** — wiederkehrende Posten mit Standardpreis anlegen und
+- **Artikel/Leistungen** – wiederkehrende Posten mit Standardpreis anlegen und
   bearbeiten; beim Erstellen per Auswahl übernehmen (Preis wird gesetzt) oder
   weiterhin frei eintippen.
-- **Aktivieren/Deaktivieren** — Kunden und Artikel können statt gelöscht auch nur
+- **Aktivieren/Deaktivieren** – Kunden und Artikel können statt gelöscht auch nur
   deaktiviert werden (bleiben in der Auswahl ausgeblendet, Rechnungsübersicht/alte
   Belege bleiben unberührt).
-- **Kunden-Import (CSV oder JSON)** — eine bestehende Kundenliste lässt sich im
+- **Kunden-Import (CSV oder JSON)** – eine bestehende Kundenliste lässt sich im
   Reiter „Kunden“ einlesen: CSV (Pflichtspalte `Name`, optional E-Mail,
   Ansprechpartner, Anschrift, Zahlungsfrist und Skonto; `;` oder `,` als
-  Trennzeichen, UTF-8 oder Windows-1252) **oder JSON** — inklusive der Datei,
+  Trennzeichen, UTF-8 oder Windows-1252) **oder JSON** – inklusive der Datei,
   die der Kunden-Export (📤, DSGVO Art. 15) ausgibt, sodass Export und Import
   zueinander passen. Gleiche Namen werden aktualisiert statt doppelt angelegt,
   fehlerhafte Datensätze einzeln gemeldet. Der Knopf öffnet direkt die
@@ -144,74 +144,80 @@ code and `TODO.md` first.
   „📄 Beispieldatei herunterladen“: der Knopf fragt in einem kleinen Fenster
   nach dem Format und liefert dann `kunden-vorlage.csv` oder
   `kunden-vorlage.json`.
-- **Artikel-Import (CSV oder JSON)** — dasselbe Prinzip im Reiter „Artikel“,
+- **Artikel-Import (CSV oder JSON)** – dasselbe Prinzip im Reiter „Artikel“,
   nur mit den zwei Feldern, die ein Artikel hat (Bezeichnung, Standardpreis).
   Eine vorhandene Bezeichnung wird im Preis aktualisiert statt doppelt
   angelegt.
-- **CSV-Massenexport** — „⬇️ Alle als CSV“ bei Kunden **und** Artikeln lädt
-  die komplette Liste als CSV, in denselben Spalten wie der Import — eine
+- **CSV-Massenexport** – „⬇️ Alle als CSV“ bei Kunden **und** Artikeln lädt
+  die komplette Liste als CSV, in denselben Spalten wie der Import – eine
   exportierte Datei lässt sich also ohne Nacharbeit wieder einlesen.
-- **Kundensuche mit Vorauswahl** — wer im Beleg-Formular nach einem Kunden
+- **Kundensuche mit Vorauswahl** – wer im Beleg-Formular nach einem Kunden
   sucht, bekommt den besten Treffer sofort ausgewählt und die Stammdaten
   übernommen; eine bereits getroffene Auswahl bleibt dabei stehen.
 
 ### DSGVO
-- **Datenschutzerklärung** — öffentlich erreichbare Seite unter `/datenschutz`.
-- **Auskunftsrecht (Art. 15 DSGVO)** — Admins können alle zu einem Kunden
+- **Datenschutzerklärung** – öffentlich erreichbare Seite unter `/datenschutz`.
+- **Auskunftsrecht (Art. 15 DSGVO)** – Admins können alle zu einem Kunden
   gespeicherten Daten (Stammdaten + zugehörige Rechnungen) als Export abrufen.
-- **Recht auf Löschung (Art. 17 DSGVO)** — Kundendaten lassen sich anonymisieren
+- **Recht auf Löschung (Art. 17 DSGVO)** – Kundendaten lassen sich anonymisieren
   (Name/Adresse/E-Mail werden entfernt); bereits ausgestellte Rechnungen bleiben
   aus steuerrechtlichen Aufbewahrungspflichten (GoBD) unverändert erhalten.
-- **Audit-Log** — protokolliert admin-seitige Zugriffe auf personenbezogene Daten
-  (Export, Anonymisierung, Backup-Downloads), einsehbar im Reiter „Audit-Log".
+- **Audit-Log** – protokolliert admin-seitige Zugriffe auf personenbezogene Daten
+  (Export, Anonymisierung, Backup-Downloads), einsehbar im Reiter „Audit-Log“.
 
 ### Verwaltung & Betrieb
-- **Anmeldung** — Login mit mehreren Benutzern, die sich **dieselben Daten teilen** und
+- **Anmeldung** – Login mit mehreren Benutzern, die sich **dieselben Daten teilen** und
   **gleichzeitig** Belege erstellen können (Nummernvergabe per DB-Lock kollisionsfrei).
-- **Benutzerverwaltung** — ein **Admin-Account** kann Benutzer anlegen, löschen und
-  Passwörter zurücksetzen (Reiter „Benutzer", nur für Admins sichtbar). Passwörter
+- **Benutzerverwaltung** – ein **Admin-Account** kann Benutzer anlegen, löschen und
+  Passwörter zurücksetzen (Reiter „Benutzer“, nur für Admins sichtbar). Passwörter
   werden als PBKDF2-Hash gespeichert. Der letzte verbleibende Admin kann sich
   weder selbst löschen noch entfernen.
-- **Firmendaten & Logo** — Absender, Steuernummer/USt-IdNr., IBAN/BIC und Logo
-  erscheinen auf dem PDF (Reiter „Firma", nur Admin).
-- **Eigene PDF-Vorlagen** — beliebig viele benannte Vorlagen (Layout, Akzent-
+- **Firmendaten & Logo** – Absender, Steuernummer/USt-IdNr., IBAN/BIC und Logo
+  erscheinen auf dem PDF (Reiter „Firma“, nur Admin).
+- **Eigene PDF-Vorlagen** – beliebig viele benannte Vorlagen (Layout, Akzent-
   und Kopffarbe, Schrift und -größe, Kopf- und Fußtext, Logo und GiroCode
-  an/aus), eine davon als Vorgabe; anlegen und ändern dürfen Admins im Reiter „Firma",
+  an/aus), eine davon als Vorgabe; anlegen und ändern dürfen Admins im Reiter „Firma“,
   eine Vorschau als Musterrechnung gibt es je Vorlage. Sobald es **eine**
   Vorlage gibt, fragt jeder PDF-Download in einem kleinen Fenster nach der
   Vorlage (`?template=<id>`); ohne Auswahl gilt die Vorgabe. Ohne jede Vorlage
   bleibt das gewohnte Standardaussehen.
-- **Layout „Formular"** — zweites Layout einer Vorlage: der Firmenvordruck,
+- **Layout „Formular“** – zweites Layout einer Vorlage: der Firmenvordruck,
   1:1 nach dem alten Excel-Muster (Kopfbalken, Absender rechts oben,
   Ankreuzfelder für Angebot/Bestellung/Lieferschein/Rechnung, Zeile
-  „Bestellung / Lieferdatum", Positionskasten mit Menge, Beschreibung,
+  „Bestellung / Lieferdatum“, Positionskasten mit Menge, Beschreibung,
   Einzelpreis und Euro, darunter Zwischensumme, Mehrwertsteuer und Endsumme).
   Firmenname, Anschrift, Bankverbindung und Steuernummer kommen aus den
   Firmendaten, die Akzentfarbe ist die Druckfarbe des Vordrucks, der Kopftext
   wird zur Branchenzeile, der Fußtext zum Kleingedruckten. Passt eine
   Rechnung nicht auf eine Seite, läuft der Kasten auf der nächsten weiter und
   die Summen stehen auf der letzten (`backend/app/pdf_form.py`). Eine fertige
-  Vorlage dafür („Mechatronik Neubauer e.U.") legt der erste Start selbst an,
-  damit der Vordruck ohne Zutun unter „PDF-Vorlagen" und in der Auswahl beim
+  Vorlage dafür („Mechatronik Neubauer e.U.“) legt der erste Start selbst an,
+  damit der Vordruck ohne Zutun unter „PDF-Vorlagen“ und in der Auswahl beim
   Beleg steht; Farbe, Schrift und Texte lassen sich wie bei jeder Vorlage
   ändern.
-- **Monitoring (nur Admin)** — Reiter „Monitoring" zeigt Laufzeit, Requests,
+- **Drei Vorlagen von Anfang an** – ein frischer Start legt neben dem Vordruck
+  auch zwei Standard-Layout-Vorlagen an, „Klassisch Blau“ (das bisherige feste
+  Aussehen, wird automatisch die Vorgabe) und „Modern Dunkel“ (andere Farbe
+  und Schrift), damit beim ersten Beleg schon eine echte Auswahl steht statt
+  nur einer einzigen Vorlage. Umbenannte oder gelöschte Vorlagen werden beim
+  nächsten Start nicht erneut angelegt.
+- **Monitoring (nur Admin)** – Reiter „Monitoring“ zeigt Laufzeit, Requests,
   Fehlerquote, Antwortzeiten, Fehlanmeldungen, Alter des jüngsten Backups,
   die letzten Serverfehler und den Bestand. Auf Wunsch aktualisiert sich die
-  Ansicht selbst: „Automatisch" wählt 1, 2 oder 10 Sekunden bzw. eine Minute,
+  Ansicht selbst: „Automatisch“ wählt 1, 2 oder 10 Sekunden bzw. eine Minute,
   die Wahl bleibt im Browser gespeichert. Der Takt läuft nur, solange die
   Ansicht offen ist; ein Tab im Hintergrund holt nichts, beim Zurückkommen
-  aber sofort. Neben dem Knopf „Aktualisieren" steht, wann die Zahlen zuletzt
+  aber sofort. Neben dem Knopf „Aktualisieren“ steht, wann die Zahlen zuletzt
   kamen und in welchem Takt sie nachkommen. Dieselben Zahlen liefert
   `GET /api/admin/metrics` als JSON und `/api/admin/metrics.prom` im
   Prometheus-Textformat. Die Zähler leben im Prozess und starten mit ihm neu.
-- **Alarm-Mails** — bei gehäuften Serverfehlern, auffällig vielen
+- **Alarm-Mails** – bei gehäuften Serverfehlern, auffällig vielen
   Fehlanmeldungen oder einem zu alten Backup geht eine Mail an die
   Firmen-E-Mail aus den Firmendaten. Schwellen, Beobachtungsfenster und
   Sperrfrist stehen in `.env` (`ALERT_*`); standardmäßig sind die Mails aus
   (`ALERTS_ENABLED=false`), `scripts/setup-prod.sh` schaltet sie ein. Ein
   Probealarm lässt sich in der Monitoring-Ansicht auslösen.
-- **Response-Cache** — Dashboard-Kennzahlen und alle drei Auswertungen (UStVA,
+- **Response-Cache** – Dashboard-Kennzahlen und alle drei Auswertungen (UStVA,
   Erlöse, freier Report-Builder) kommen für `CACHE_TTL_SECONDS` (Standard
   30 s) aus dem Prozessspeicher statt bei jedem Klick neu aus der Datenbank
   berechnet zu werden (Antwort-Header `X-Cache: HIT`/`MISS`). Beleg- und
@@ -219,44 +225,44 @@ code and `TODO.md` first.
   zusammenarbeiten. Ein schreibender Zugriff auf Rechnungen, Gutschriften oder
   eine Backup-Wiederherstellung leert den Cache; abschaltbar über
   `CACHE_ENABLED=false`.
-- **Automatische Backups** — täglicher `pg_dump` (gzip) in `./backups`, hält die
+- **Automatische Backups** – täglicher `pg_dump` (gzip) in `./backups`, hält die
   letzten 14 Sicherungen.
-- **Backup-Verwaltung im Admin-Bereich** — vorhandene Backups auflisten,
+- **Backup-Verwaltung im Admin-Bereich** – vorhandene Backups auflisten,
   herunterladen oder direkt über die Oberfläche in die laufende Datenbank
   zurückspielen (mit doppelter Sicherheitsabfrage, da destruktiv).
-- **Dashboard** — Kennzahlen (Umsatz, offen, überfällig) und ein Umsatz-Diagramm
+- **Dashboard** – Kennzahlen (Umsatz, offen, überfällig) und ein Umsatz-Diagramm
   der letzten 6 Monate; ist die Startseite nach dem Login.
-- **Rechnungsübersicht** (früher „History“) — nach Status/überfällig filtern, nach
+- **Rechnungsübersicht** (früher „History“) – nach Status/überfällig filtern, nach
   Nummer/Kunde suchen und Spalten sortieren.
-- **Hell-/Dunkel-Modus** — umschaltbar, Auswahl wird gespeichert.
-- **Sicherheit** — Login-Sperre nach zu vielen Fehlversuchen (Brute-Force-Schutz,
+- **Hell-/Dunkel-Modus** – umschaltbar, Auswahl wird gespeichert.
+- **Sicherheit** – Login-Sperre nach zu vielen Fehlversuchen (Brute-Force-Schutz,
   5 Min. Sperre nach 5 Fehlversuchen), **CSRF-Schutz** für alle schreibenden
   Requests, **Rate-Limit** je IP (Standard 600 Requests/Min., strenger für den
   Login), **Sicherheits-Header** (CSP, HSTS, X-Frame-Options, Referrer-Policy …)
   und ein Sitzungs-Cookie mit `SameSite=Strict` und 12 Stunden Laufzeit. Alles
   über `.env` einstellbar (siehe `.env.example`).
-- **Dienstbenutzer statt root** — die Setup-Skripte legen den Host-Benutzer
+- **Dienstbenutzer statt root** – die Setup-Skripte legen den Host-Benutzer
   `rechnung` an und übergeben Dateien an ihn; der `web`-Container läuft unter
   derselben UID/GID (`APP_UID`/`APP_GID`), nicht als root.
-- **Logging** — jede Anfrage bekommt eine Request-ID; Logzeilen sind JSON und
+- **Logging** – jede Anfrage bekommt eine Request-ID; Logzeilen sind JSON und
   jede Fehlermeldung enthält die ID, sodass ein Screenshot direkt zum Logeintrag
   führt (`docker compose logs web`).
-- **Live-Anzeige „jemand ist auch hier"** — hat ein Kollege denselben Beleg
+- **Live-Anzeige „jemand ist auch hier“** – hat ein Kollege denselben Beleg
   offen, steht das als Hinweis über dem Formular; in den Listen markiert ein
   👀 die Belege, an denen gerade jemand sitzt. Ergänzt die Bearbeitungssperre
   um eine Rückmeldung schon *während* des Tippens, nicht erst beim
   Speichern; gilt wie die Sperre selbst für Rechnungen, Angebote UND
   Lieferscheine.
-- **Entwurfs-Speicher** — begonnene Rechnungen, Angebote und Lieferscheine
+- **Entwurfs-Speicher** – begonnene Rechnungen, Angebote und Lieferscheine
   überleben ein Neuladen der Seite: der Entwurf liegt lokal im Browser
   (localStorage, 7 Tage) und wird beim Öffnen wieder eingesetzt. Es geht nichts
   davon an den Server.
-- **Suchen & Filtern** — Such- und Filterfelder in allen Listen (Rechnungen,
+- **Suchen & Filtern** – Such- und Filterfelder in allen Listen (Rechnungen,
   Angebote, Lieferscheine, Kunden, Artikel, Benutzer, Audit-Log) und in der
   Kundenauswahl beim Anlegen eines Belegs.
-- **HTTPS** — der Proxy bedient zusätzlich Port 443 (selbstsigniertes Zertifikat per Default,
+- **HTTPS** – der Proxy bedient zusätzlich Port 443 (selbstsigniertes Zertifikat per Default,
   optional echtes Let's-Encrypt-Zertifikat über `scripts/setup-prod.sh`).
-- **Datenbank** — alles wird in PostgreSQL gespeichert.
+- **Datenbank** – alles wird in PostgreSQL gespeichert.
 
 ## Technik
 
@@ -272,7 +278,7 @@ code and `TODO.md` first.
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
 | Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
 | Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
-| Tests / CI | pytest (249 Backend-Tests) + jsdom (95 Frontend-Tests), GitHub Actions |
+| Tests / CI | pytest (249 Backend-Tests) + jsdom (102 Frontend-Tests), GitHub Actions |
 
 ## Starten
 
@@ -474,7 +480,7 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `PUT`   | `/api/delivery-notes/{id}` | Bearbeiten |
 | `PATCH` | `/api/delivery-notes/{id}/status` | Status setzen (offen/abgeschlossen/storniert) |
 | `DELETE`| `/api/delivery-notes/{id}` | Löschen |
-| `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen (setzt *offen* → *abgeschlossen*) |
+| `GET`   | `/api/delivery-notes/{id}/pdf` | PDF herunterladen (setzt *offen* -> *abgeschlossen*) |
 | `POST`  | `/api/delivery-notes/{id}/email` | Per E-Mail senden |
 | `POST`  | `/api/delivery-notes/{id}/convert-to-quote` | In Angebot umwandeln (nur einmal) |
 

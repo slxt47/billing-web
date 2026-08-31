@@ -11,21 +11,36 @@
   <header>
     <h1>🧾 Rechnungs-App</h1>
     <nav>
-      <button id="nav-dashboard" class="active">Dashboard</button>
-      <button id="nav-new">Neue Rechnung</button>
-      <button id="nav-quotes">Angebote</button>
-      <button id="nav-delivery">Lieferscheine</button>
-      <button id="nav-history">Rechnungsübersicht</button>
-      <button id="nav-credit">Gutschriften</button>
-      <button id="nav-reports">Auswertungen</button>
-      <button id="nav-customers">Kunden</button>
-      <button id="nav-products">Artikel</button>
-      <button id="nav-settings" hidden>Firma</button>
-      <button id="nav-users" hidden>Benutzer</button>
-      <button id="nav-audit" hidden>Audit-Log</button>
-      <button id="nav-backup" hidden>Backup</button>
-      <button id="nav-monitoring" hidden>Monitoring</button>
-      <button id="theme-toggle" class="icon-btn" title="Hell/Dunkel umschalten">🌙</button>
+      <!-- Kernpunkte: immer in einer Zeile, auf schmalen Bildschirmen läuft
+           die Leiste seitwärts statt umzubrechen (siehe .nav-primary in
+           styles.css). -->
+      <div class="nav-primary" id="nav-primary">
+        <button id="nav-dashboard" class="active">Dashboard</button>
+        <button id="nav-new">Neue Rechnung</button>
+        <button id="nav-quotes">Angebote</button>
+        <button id="nav-delivery">Lieferscheine</button>
+        <button id="nav-history">Rechnungsübersicht</button>
+        <button id="nav-credit">Gutschriften</button>
+        <button id="nav-reports">Auswertungen</button>
+        <button id="nav-customers">Kunden</button>
+        <button id="nav-products">Artikel</button>
+      </div>
+      <!-- Verwaltungspunkte (nur Admin): stehen nicht mehr in der Leiste
+           selbst, sondern hinter dem Burger-Menü. -->
+      <span class="popover-anchor nav-more-anchor">
+        <button type="button" id="nav-more-toggle" class="icon-btn" hidden
+                aria-haspopup="true" aria-expanded="false"
+                title="Weitere Menüpunkte" aria-label="Weitere Menüpunkte">☰</button>
+        <div id="nav-more-menu" class="popover nav-more-menu" role="menu" hidden>
+          <button id="nav-settings" hidden>Firma</button>
+          <button id="nav-users" hidden>Benutzer</button>
+          <button id="nav-audit" hidden>Audit-Log</button>
+          <button id="nav-backup" hidden>Backup</button>
+          <button id="nav-monitoring" hidden>Monitoring</button>
+        </div>
+      </span>
+      <button id="theme-toggle" class="icon-btn" title="Hell/Dunkel umschalten"
+              aria-label="Hell/Dunkel umschalten">🌙</button>
       <span class="nav-user">👤 <span id="current-user">…</span></span>
       <a id="logout" href="/logout" title="Abmelden">Abmelden</a>
     </nav>
@@ -114,12 +129,14 @@
         <p class="hint">Tipp: In „Beschreibung" kannst du einen gespeicherten Artikel
           auswählen (Preis wird übernommen) oder einfach frei tippen.</p>
         <datalist id="product-list"></datalist>
-        <table id="items-table">
-          <thead>
-            <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis (€)</th><th>Summe</th><th></th></tr>
-          </thead>
-          <tbody id="items-body"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table id="items-table">
+            <thead>
+              <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis (€)</th><th>Summe</th><th></th></tr>
+            </thead>
+            <tbody id="items-body"></tbody>
+          </table>
+        </div>
         <button type="button" id="add-item" class="secondary">+ Position</button>
 
         <label>Hinweise
@@ -189,12 +206,14 @@
 
         <h3>Positionen</h3>
         <datalist id="quote-product-list"></datalist>
-        <table id="quote-items-table">
-          <thead>
-            <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis (€)</th><th>Summe</th><th></th></tr>
-          </thead>
-          <tbody id="quote-items-body"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table id="quote-items-table">
+            <thead>
+              <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis (€)</th><th>Summe</th><th></th></tr>
+            </thead>
+            <tbody id="quote-items-body"></tbody>
+          </table>
+        </div>
         <button type="button" id="quote-add-item" class="secondary">+ Position</button>
 
         <label>Hinweise
@@ -275,12 +294,14 @@
         <h3>Positionen</h3>
         <p class="hint">Beim Lieferschein werden nur Beschreibung und Menge erfasst (kein Preis).</p>
         <datalist id="delivery-product-list"></datalist>
-        <table id="delivery-items-table">
-          <thead>
-            <tr><th>Beschreibung</th><th>Menge</th><th></th></tr>
-          </thead>
-          <tbody id="delivery-items-body"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table id="delivery-items-table">
+            <thead>
+              <tr><th>Beschreibung</th><th>Menge</th><th></th></tr>
+            </thead>
+            <tbody id="delivery-items-body"></tbody>
+          </table>
+        </div>
         <button type="button" id="delivery-add-item" class="secondary">+ Position</button>
 
         <label>Hinweise
@@ -392,12 +413,14 @@
 
         <h3>Gutgeschriebene Positionen</h3>
         <datalist id="credit-product-list"></datalist>
-        <table id="credit-items-table">
-          <thead>
-            <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis</th><th></th></tr>
-          </thead>
-          <tbody id="credit-items-body"></tbody>
-        </table>
+        <div class="table-scroll">
+          <table id="credit-items-table">
+            <thead>
+              <tr><th>Beschreibung</th><th>Menge</th><th>Einzelpreis</th><th></th></tr>
+            </thead>
+            <tbody id="credit-items-body"></tbody>
+          </table>
+        </div>
         <button type="button" id="credit-add-item" class="secondary">+ Position</button>
 
         <label>Grund
