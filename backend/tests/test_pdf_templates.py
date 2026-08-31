@@ -14,7 +14,14 @@ TEMPLATE = {
 }
 
 
+def clear_templates(client):
+    """Blanko-Stand: die beim Start angelegte Vordruck-Vorlage weg."""
+    for tpl in client.get("/api/pdf-templates").json():
+        client.delete(f"/api/pdf-templates/{tpl['id']}")
+
+
 def test_first_template_becomes_the_default(admin_client):
+    clear_templates(admin_client)
     tpl = admin_client.post("/api/pdf-templates", json=TEMPLATE).json()
     assert tpl["is_default"] is True
     second = admin_client.post("/api/pdf-templates",
@@ -34,6 +41,7 @@ def test_default_can_be_moved(admin_client):
 
 
 def test_deleting_the_default_hands_it_on(admin_client):
+    clear_templates(admin_client)
     first = admin_client.post("/api/pdf-templates", json=TEMPLATE).json()
     second = admin_client.post("/api/pdf-templates",
                                json={**TEMPLATE, "name": "Blau"}).json()
@@ -108,6 +116,36 @@ def test_preview_needs_no_real_document(admin_client):
 # ---------------------------------------------------- Vordruck ("formular")
 FORM_TEMPLATE = {**TEMPLATE, "name": "Vordruck", "layout": "formular",
                  "font_family": "Helvetica"}
+
+
+def test_the_form_template_is_ready_from_the_start(admin_client):
+    """Der Vordruck steht ohne Zutun unter "PDF-Vorlagen" – vorher musste ihn
+    jeder selbst anlegen und sah beim Beleg keine Auswahl."""
+    templates = admin_client.get("/api/pdf-templates").json()
+    assert [(t["name"], t["layout"], t["is_default"]) for t in templates] == [
+        ("Mechatronik Neubauer e.U.", "formular", True)]
+
+    invoice = make_invoice(admin_client)
+    assert admin_client.get(f"/api/invoices/{invoice['id']}/pdf"
+                            f"?template={templates[0]['id']}"
+                            ).content.startswith(b"%PDF")
+
+
+def test_the_form_template_is_seeded_only_once(admin_client):
+    """Ein zweiter Start auf derselben Datenbank legt sie nicht noch einmal an."""
+    from app import crud
+    from app.database import SessionLocal
+
+    admin_client.put(f"/api/pdf-templates/"
+                     f"{admin_client.get('/api/pdf-templates').json()[0]['id']}",
+                     json={**FORM_TEMPLATE, "name": "Eigener Vordruck"})
+    db = SessionLocal()
+    try:
+        crud.seed_pdf_templates(db)
+    finally:
+        db.close()
+    assert [t["name"] for t in admin_client.get("/api/pdf-templates").json()] == [
+        "Eigener Vordruck"]
 
 
 def test_layout_defaults_to_standard(admin_client):

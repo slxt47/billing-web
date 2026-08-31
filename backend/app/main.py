@@ -35,6 +35,7 @@ def on_startup():
     db = SessionLocal()
     try:
         crud.seed_users(db)
+        crud.seed_pdf_templates(db)
     finally:
         db.close()
     logging_setup.log.info("startup complete", extra={"fields": {

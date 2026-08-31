@@ -159,10 +159,10 @@ code and `TODO.md` first.
 - **Eigene PDF-Vorlagen** — beliebig viele benannte Vorlagen (Layout, Akzent-
   und Kopffarbe, Schrift und -größe, Kopf- und Fußtext, Logo und GiroCode
   an/aus), eine davon als Vorgabe; anlegen und ändern dürfen Admins im Reiter „Firma",
-  eine Vorschau als Musterrechnung gibt es je Vorlage. Gibt es mehr als eine,
-  fragt jeder PDF-Download in einem kleinen Fenster nach der Vorlage
-  (`?template=<id>`), sonst gilt die Vorgabe. Ohne jede Vorlage bleibt das
-  gewohnte Standardaussehen.
+  eine Vorschau als Musterrechnung gibt es je Vorlage. Sobald es **eine**
+  Vorlage gibt, fragt jeder PDF-Download in einem kleinen Fenster nach der
+  Vorlage (`?template=<id>`); ohne Auswahl gilt die Vorgabe. Ohne jede Vorlage
+  bleibt das gewohnte Standardaussehen.
 - **Layout „Formular"** — zweites Layout einer Vorlage: der Firmenvordruck,
   1:1 nach dem alten Excel-Muster (Kopfbalken, Absender rechts oben,
   Ankreuzfelder für Angebot/Bestellung/Lieferschein/Rechnung, Zeile
@@ -172,13 +172,19 @@ code and `TODO.md` first.
   Firmendaten, die Akzentfarbe ist die Druckfarbe des Vordrucks, der Kopftext
   wird zur Branchenzeile, der Fußtext zum Kleingedruckten. Passt eine
   Rechnung nicht auf eine Seite, läuft der Kasten auf der nächsten weiter und
-  die Summen stehen auf der letzten (`backend/app/pdf_form.py`).
+  die Summen stehen auf der letzten (`backend/app/pdf_form.py`). Eine fertige
+  Vorlage dafür („Mechatronik Neubauer e.U.") legt der erste Start selbst an,
+  damit der Vordruck ohne Zutun unter „PDF-Vorlagen" und in der Auswahl beim
+  Beleg steht; Farbe, Schrift und Texte lassen sich wie bei jeder Vorlage
+  ändern.
 - **Monitoring (nur Admin)** — Reiter „Monitoring" zeigt Laufzeit, Requests,
   Fehlerquote, Antwortzeiten, Fehlanmeldungen, Alter des jüngsten Backups,
   die letzten Serverfehler und den Bestand. Auf Wunsch aktualisiert sich die
   Ansicht selbst: „Automatisch" wählt 1, 2 oder 10 Sekunden bzw. eine Minute,
   die Wahl bleibt im Browser gespeichert. Der Takt läuft nur, solange die
-  Ansicht offen und der Tab im Vordergrund ist. Dieselben Zahlen liefert
+  Ansicht offen ist; ein Tab im Hintergrund holt nichts, beim Zurückkommen
+  aber sofort. Neben dem Knopf „Aktualisieren" steht, wann die Zahlen zuletzt
+  kamen und in welchem Takt sie nachkommen. Dieselben Zahlen liefert
   `GET /api/admin/metrics` als JSON und `/api/admin/metrics.prom` im
   Prometheus-Textformat. Die Zähler leben im Prozess und starten mit ihm neu.
 - **Alarm-Mails** — bei gehäuften Serverfehlern, auffällig vielen

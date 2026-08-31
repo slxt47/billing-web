@@ -148,6 +148,12 @@ hard-coded look exactly. A `pdf_templates` row carries colours, one of the
 three built-in PDF font families (no font embedding), size, header/footer text
 and the logo/GiroCode switches; exactly one row is `is_default`.
 
+Startup seeds one ready-made template (`crud.seed_pdf_templates`, called from
+`main.on_startup` next to `seed_users`): the pre-printed form as
+"Mechatronik Neubauer e.U." with layout "formular". It is only created when
+no "formular" template exists yet, so a hand-made one is never duplicated and
+an edited one is left alone.
+
 A template also picks one of two layouts (`pdf.LAYOUTS`, column `layout`).
 "standard" is the Platypus flow above; "formular" hands the document to
 `pdf_form.py`, which redraws the company's pre-printed form on a bare canvas:
@@ -182,9 +188,15 @@ classes, slow requests, response-time sum/max, the last 20 server errors) and
 records failed logins from the login route. `GET /api/admin/metrics` returns
 that plus document counts; `/api/admin/metrics.prom` the same in Prometheus
 text format. Both are admin-only — there is no separate monitoring account.
-The view can poll itself (1, 2, 10 or 60 s, kept in `localStorage`); the timer
-is bound to the view and skips hidden tabs, and a request in flight is never
-overtaken by the next tick.
+The view can poll itself (1, 2, 10 or 60 s, kept in `localStorage`). The tick
+is a chained `setTimeout` rather than `setInterval`: the next fetch is only
+scheduled once the previous one has come back, so slow answers cannot pile up
+and a tab that was in the background carries on instead of getting stuck. The
+chain is bound to the view, a hidden tab skips the fetch but keeps the beat,
+and coming back to the foreground fetches at once (`visibilitychange`). Next
+to the refresh button stands when the numbers last arrived, at which rate, and
+a failed fetch with its status — otherwise a stalled poll would look like
+fresh numbers.
 Alerts (many 5xx, many failed logins, stale or missing backup) go by e-mail to
 the company address from the settings, at most once per `ALERT_COOLDOWN` per
 kind; the check runs from the middleware at most once a minute and only when

@@ -818,7 +818,7 @@ async function loadDashboard() {
     col.title = euro(m.revenue);
 
     const bar = document.createElement("div");
-    bar.className = "bar";
+    bar.className = "chart-bar";
     bar.style.height = `${Math.round(m.revenue / max * 100)}%`;
 
     const val = document.createElement("div");
@@ -1953,7 +1953,13 @@ async function loadMonitoring() {
 
 async function fillMonitoring() {
   const res = await fetch("/api/admin/metrics");
-  if (!res.ok) return;
+  if (!res.ok) {
+    // Sonst bliebe die Anzeige stumm auf alten Zahlen stehen und der Takt
+    // sähe aus, als liefe er nicht.
+    monitoringError = "Abruf fehlgeschlagen (" + res.status + ")";
+    monitoringStamp();
+    return;
+  }
   const m = await res.json();
 
   const errorRate = (m.error_rate * 100).toFixed(2).replace(".", ",");
@@ -2001,37 +2007,81 @@ async function fillMonitoring() {
     body.appendChild(tr);
   }
   $("#monitoring-noerrors").hidden = (m.recent_errors || []).length > 0;
-  $("#monitoring-stamp").textContent =
-    "Stand " + new Date().toLocaleTimeString("de-DE");
+  monitoringLastAt = new Date();
+  monitoringError = "";
+  monitoringStamp();
 }
 
 // Automatisch aktualisieren: das gewählte Intervall überlebt im localStorage,
-// der Timer läuft nur, solange die Monitoring-Ansicht wirklich offen ist.
+// der Takt läuft nur, solange die Monitoring-Ansicht wirklich offen ist.
 const MONITORING_INTERVAL_KEY = "rechnung.monitoring.interval";
 let monitoringTimer = null;
 let monitoringBusy = false;
+let monitoringLastAt = null;
+let monitoringError = "";
+
+function monitoringSeconds() {
+  const select = $("#monitoring-auto");
+  return select ? parseInt(select.value, 10) || 0 : 0;
+}
+
+// Neben dem Knopf steht, wann die Zahlen zuletzt kamen und in welchem Takt sie
+// nachkommen – daran sieht man, dass sich etwas tut, auch wenn die Kennzahlen
+// gerade gleich bleiben.
+function monitoringStamp() {
+  const el = $("#monitoring-stamp");
+  if (!el) return;
+  const select = $("#monitoring-auto");
+  const takt = monitoringSeconds() && select && select.selectedOptions[0]
+    ? " · " + select.selectedOptions[0].textContent : "";
+  if (monitoringError) {
+    el.textContent = monitoringError + takt;
+    el.className = "err";
+    return;
+  }
+  el.textContent = (monitoringLastAt
+    ? "Stand " + monitoringLastAt.toLocaleTimeString("de-DE")
+    : "noch nicht geladen") + takt;
+  el.className = "hint";
+}
 
 function stopMonitoringAuto() {
   if (monitoringTimer === null) return;
-  clearInterval(monitoringTimer);
+  clearTimeout(monitoringTimer);
   monitoringTimer = null;
 }
 
+// Kein setInterval: der nächste Abruf wird erst gestellt, wenn der vorige
+// durch ist. So stapeln sich langsame Antworten nicht, und ein Takt, der in
+// einem Hintergrund-Tab ausgesetzt hat, läuft beim Zurückkommen weiter,
+// statt hängen zu bleiben.
 function startMonitoringAuto() {
   stopMonitoringAuto();
-  const seconds = parseInt($("#monitoring-auto").value, 10) || 0;
-  if (!seconds) return;
-  monitoringTimer = setInterval(() => {
-    // Ein Tab im Hintergrund muss nicht jede Sekunde nachfragen.
-    if (!document.hidden && !views.monitoring.hidden) loadMonitoring();
+  monitoringStamp();
+  const seconds = monitoringSeconds();
+  if (!seconds || views.monitoring.hidden) return;
+  monitoringTimer = setTimeout(async () => {
+    monitoringTimer = null;
+    // Ein Tab im Hintergrund fragt nicht nach; der Takt selbst läuft weiter.
+    if (!document.hidden) await loadMonitoring();
+    startMonitoringAuto();
   }, seconds * 1000);
 }
 
 $("#monitoring-auto").onchange = () => {
   try { localStorage.setItem(MONITORING_INTERVAL_KEY, $("#monitoring-auto").value); }
   catch (_) { /* Speicher blockiert – dann gilt die Wahl nur für diese Sitzung */ }
+  loadMonitoring();          // die Wahl soll sofort etwas bewirken
   startMonitoringAuto();
 };
+
+// Zurück im Vordergrund: sofort frische Zahlen, statt bis zum nächsten Takt
+// alte anzuzeigen.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || views.monitoring.hidden || !monitoringSeconds()) return;
+  loadMonitoring();
+  startMonitoringAuto();
+});
 
 (function restoreMonitoringInterval() {
   let saved = null;
@@ -2042,7 +2092,10 @@ $("#monitoring-auto").onchange = () => {
   }
 })();
 
-$("#monitoring-refresh").onclick = loadMonitoring;
+$("#monitoring-refresh").onclick = () => {
+  loadMonitoring();
+  startMonitoringAuto();     // von Hand geholt heißt: der Takt beginnt neu
+};
 $("#monitoring-prom").onclick = () => downloadUrl("/api/admin/metrics.prom", "metrics.prom");
 $("#monitoring-test-alert").onclick = async () => {
   const msg = $("#monitoring-msg");
@@ -2242,8 +2295,10 @@ $("#template-form").addEventListener("submit", async (e) => {
   }
 });
 
-// Auswahl beim Download: gibt es mehr als eine Vorlage, fragt ein kleines
-// Fenster nach – sonst lädt der Link direkt mit der Vorgabe herunter.
+// Auswahl beim Download: gibt es überhaupt eine Vorlage, fragt ein kleines
+// Fenster nach – sonst lädt der Link direkt herunter. (Früher erschien das
+// Fenster erst ab zwei Vorlagen; wer nur den Vordruck angelegt hatte, sah
+// beim Beleg nie eine Auswahl.)
 const pdfTemplateMenu = document.createElement("div");
 pdfTemplateMenu.className = "popover floating";
 pdfTemplateMenu.id = "pdf-template-menu";
@@ -2252,11 +2307,21 @@ document.body.appendChild(pdfTemplateMenu);
 
 function closePdfTemplateMenu() { pdfTemplateMenu.hidden = true; }
 
+function templateChoiceLabel(t) {
+  return t.name + (t.layout === "formular" ? " (Vordruck)" : "")
+                + (t.is_default ? " ★" : "");
+}
+
 function openPdfTemplateMenu(link) {
   const href = link.getAttribute("href");
   pdfTemplateMenu.innerHTML = `<p class="popover-title">Mit welcher Vorlage?</p>`;
-  const choices = [{ id: "", name: "Vorgabe" },
-                   ...templatesCache.map((t) => ({ id: t.id, name: t.name }))];
+  const choices = templatesCache.map((t) => ({ id: t.id,
+                                              name: templateChoiceLabel(t) }));
+  // Ohne Vorgabe-Vorlage gibt es zusätzlich das Standardaussehen (kein
+  // ?template=); mit Vorgabe steht die schon mit ★ in der Liste.
+  if (!templatesCache.some((t) => t.is_default)) {
+    choices.unshift({ id: "", name: "Vorgabe (Standardaussehen)" });
+  }
   for (const choice of choices) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -2282,7 +2347,7 @@ document.addEventListener("click", (e) => {
     }
     return;
   }
-  if (templatesCache.length < 2) return;   // nichts zu wählen
+  if (!templatesCache.length) return;      // ohne Vorlage nichts zu wählen
   e.preventDefault();
   openPdfTemplateMenu(link);
 });

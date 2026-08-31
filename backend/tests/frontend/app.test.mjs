@@ -121,8 +121,10 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
     }
     const route = path in table ? table[path] : { ok: true };
     // Eine Route darf eine Funktion sein, wenn GET und POST sich
-    // unterscheiden müssen (z. B. Liste holen vs. Rechnung anlegen).
-    return response(typeof route === "function" ? route(options) : route);
+    // unterscheiden müssen (z. B. Liste holen vs. Rechnung anlegen), und sie
+    // darf statt der Daten eine fertige Antwort liefern (z. B. mit Status 503).
+    const value = typeof route === "function" ? route(options) : route;
+    return value && typeof value.json === "function" ? value : response(value);
   };
 
   addFormNamedAccess(window);
@@ -1038,6 +1040,59 @@ test("Der gewählte Takt überlebt einen Neustart im localStorage", async () => 
   assert.equal(second.window.document.querySelector("#monitoring-auto").value, "10");
 });
 
+test("Der Takt läuft weiter und schreibt den Stand daneben", async () => {
+  const { window, requests } = startApp({ routes: { "/api/admin/metrics": METRICS } });
+  await settle();
+  const calls = () => requests.filter((r) => r.url === "/api/admin/metrics").length;
+
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+  const select = window.document.querySelector("#monitoring-auto");
+  select.value = "1";
+  fire(select, "change");
+  await settle(3200);
+  // Ein Abruf reicht nicht: der Takt muss sich immer wieder neu stellen.
+  assert.ok(calls() >= 4, `mindestens vier Abrufe (waren ${calls()})`);
+
+  const stamp = window.document.querySelector("#monitoring-stamp");
+  assert.match(stamp.textContent, /^Stand \d{1,2}:\d{2}:\d{2}( · alle 1 s)$/);
+});
+
+test("Ein fehlgeschlagener Abruf steht neben dem Knopf", async () => {
+  const { window } = startApp({
+    routes: { "/api/admin/metrics": () => response({ detail: "weg" }, 503) },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  const stamp = window.document.querySelector("#monitoring-stamp");
+  assert.match(stamp.textContent, /Abruf fehlgeschlagen \(503\)/);
+  assert.equal(stamp.className, "err");
+});
+
+test("Zurück im Vordergrund holt der Tab sofort nach", async () => {
+  const { window, requests } = startApp({ routes: { "/api/admin/metrics": METRICS } });
+  await settle();
+  const calls = () => requests.filter((r) => r.url === "/api/admin/metrics").length;
+
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+  const select = window.document.querySelector("#monitoring-auto");
+  select.value = "60";            // langer Takt: ohne Nachholen käme nichts
+  fire(select, "change");
+  await settle(50);
+
+  let hidden = true;
+  Object.defineProperty(window.document, "hidden", { configurable: true,
+                                                     get: () => hidden });
+  const before = calls();
+  hidden = false;
+  window.document.dispatchEvent(new window.Event("visibilitychange"));
+  await settle(50);
+  assert.ok(calls() > before, "beim Zurückkommen wird sofort geholt");
+});
+
 test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async () => {
   const { window } = startApp();
   await settle();
@@ -1123,7 +1178,7 @@ test("Eine Vorlage lässt sich anlegen", async () => {
   assert.equal(body.layout, "standard");
 });
 
-test("Ab zwei Vorlagen fragt der PDF-Download nach der Vorlage", async () => {
+test("Der PDF-Download fragt nach der Vorlage", async () => {
   const { window } = startApp({
     routes: { "/api/pdf-templates": TEMPLATES,
               "/api/invoices": [INVOICE_ROW] },
@@ -1137,7 +1192,7 @@ test("Ab zwei Vorlagen fragt der PDF-Download nach der Vorlage", async () => {
   const menu = window.document.querySelector("#pdf-template-menu");
   assert.equal(menu.hidden, false, "das Auswahlfenster ist offen");
   assert.deepEqual([...menu.querySelectorAll("button")].map((b) => b.textContent),
-                   ["Vorgabe", "Standard", "Grün"]);
+                   ["Standard ★", "Grün (Vordruck)"]);
 });
 
 test("Die gewählte Vorlage hängt am Download", async () => {
@@ -1152,16 +1207,35 @@ test("Die gewählte Vorlage hängt am Download", async () => {
   window.document.querySelector("#history-body a[data-act=pdf]")
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
   const menu = window.document.querySelector("#pdf-template-menu");
-  [...menu.querySelectorAll("button")].find((b) => b.textContent === "Grün").click();
+  [...menu.querySelectorAll("button")]
+    .find((b) => b.textContent === "Grün (Vordruck)").click();
 
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].href, "/api/invoices/3/pdf?template=2");
   assert.equal(menu.hidden, true, "danach ist das Fenster wieder zu");
 });
 
-test("Mit höchstens einer Vorlage lädt der Link direkt herunter", async () => {
+test("Schon eine einzige Vorlage steht beim Beleg zur Wahl", async () => {
+  // Vorher erschien das Fenster erst ab zwei Vorlagen: wer nur den Vordruck
+  // angelegt hatte, sah bei der Rechnung nie eine Auswahl.
   const { window } = startApp({
-    routes: { "/api/pdf-templates": [TEMPLATES[0]], "/api/invoices": [INVOICE_ROW] },
+    routes: { "/api/pdf-templates": [TEMPLATES[1]], "/api/invoices": [INVOICE_ROW] },
+  });
+  await settle();
+  window.document.querySelector("#nav-history").click();
+  await settle();
+
+  const link = window.document.querySelector("#history-body a[data-act=pdf]");
+  link.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  const menu = window.document.querySelector("#pdf-template-menu");
+  assert.equal(menu.hidden, false);
+  assert.deepEqual([...menu.querySelectorAll("button")].map((b) => b.textContent),
+                   ["Vorgabe (Standardaussehen)", "Grün (Vordruck)"]);
+});
+
+test("Ohne Vorlage lädt der Link direkt herunter", async () => {
+  const { window } = startApp({
+    routes: { "/api/pdf-templates": [], "/api/invoices": [INVOICE_ROW] },
   });
   await settle();
   window.document.querySelector("#nav-history").click();

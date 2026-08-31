@@ -484,9 +484,7 @@
         dieses Containers und beginnen bei jedem Neustart von vorn.</p>
       <div class="bar">
         <button type="button" id="monitoring-refresh" class="secondary">🔄 Aktualisieren</button>
-        <button type="button" id="monitoring-prom" class="secondary">⬇️ Prometheus-Format</button>
-        <button type="button" id="monitoring-test-alert" class="secondary">✉️ Probealarm senden</button>
-        <label class="inline">Automatisch
+        <label class="inline" for="monitoring-auto">Automatisch
           <select id="monitoring-auto">
             <option value="0">aus</option>
             <option value="1">alle 1 s</option>
@@ -496,6 +494,8 @@
           </select>
         </label>
         <span id="monitoring-stamp" class="hint"></span>
+        <button type="button" id="monitoring-prom" class="secondary">⬇️ Prometheus-Format</button>
+        <button type="button" id="monitoring-test-alert" class="secondary">✉️ Probealarm senden</button>
         <span id="monitoring-msg"></span>
       </div>
       <div class="kpi-grid" id="monitoring-kpis"></div>
@@ -687,7 +687,10 @@
         Kopfbalken, Ankreuzfelder für Angebot/Bestellung/Lieferschein/Rechnung,
         Positionskasten und die drei Summenkästen. Dort ist die Akzentfarbe die
         Druckfarbe des Vordrucks, der Kopftext steht als Branchenzeile rechts
-        oben, der Fußtext im Kleingedruckten – einen GiroCode gibt es nicht.</p>
+        oben, der Fußtext im Kleingedruckten – einen GiroCode gibt es nicht.
+        Eine fertige Vordruck-Vorlage („Mechatronik Neubauer e.U.“) legt die App
+        beim ersten Start selbst an; Farbe, Schrift und Texte lassen sich hier
+        ändern.</p>
       <form id="template-form">
         <input type="hidden" name="template_id" value="">
         <div class="grid">

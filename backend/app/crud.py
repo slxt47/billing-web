@@ -1085,6 +1085,44 @@ def set_default_pdf_template(db: Session, tpl: models.PdfTemplate) -> models.Pdf
     return tpl
 
 
+# Der Firmenvordruck ist der Grund, warum es das Layout "formular" gibt.
+# Damit er unter "PDF-Vorlagen" und in der Auswahl beim Beleg auftaucht, legt
+# der Start eine fertige Vorlage dafür an, statt sie jedem von Hand
+# nachbauen zu lassen.
+FORM_TEMPLATE_NAME = "Mechatronik Neubauer e.U."
+
+
+def seed_pdf_templates(db: Session) -> None:
+    """Beim Start: sorgt dafür, dass es eine Vordruck-Vorlage gibt.
+
+    Nur, wenn noch keine Vorlage mit dem Layout "formular" existiert – wer
+    seine eigene angelegt hat, bekommt keine zweite dazu.
+    """
+    if (db.query(models.PdfTemplate)
+          .filter(models.PdfTemplate.layout == "formular").first()):
+        return
+    name = FORM_TEMPLATE_NAME
+    if get_pdf_template_by_name(db, name):
+        # Der Name ist schon für eine Standard-Vorlage vergeben.
+        name = f"{FORM_TEMPLATE_NAME} (Vordruck)"
+        if get_pdf_template_by_name(db, name):
+            return
+    create_pdf_template(db, schemas.PdfTemplateIn(
+        name=name,
+        layout="formular",
+        # Die Akzentfarbe ist im Vordruck die Druckfarbe (blau), einen
+        # GiroCode kennt das Layout nicht.
+        accent_color="#2d6cdf",
+        header_color="#2d3748",
+        font_family="Helvetica",
+        font_size=10,
+        header_note="",
+        footer_text="",
+        show_logo=True,
+        show_qr=False,
+    ))
+
+
 def delete_pdf_template(db: Session, tpl: models.PdfTemplate) -> None:
     was_default = tpl.is_default
     db.delete(tpl)

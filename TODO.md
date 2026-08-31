@@ -172,9 +172,11 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Vorlagen mit Akzent-/Kopffarbe, Schrift und -größe, Kopf- und Fußtext,
     Logo und GiroCode an/aus, eine davon als Vorgabe. Verwaltung in den
     Firmendaten (nur Admins) samt Vorschau als Musterrechnung; jeder
-    PDF-Download nimmt ?template=<id>, und ab zwei Vorlagen fragt die Liste
-    beim Klick nach. Ohne Vorlage gilt pdf.DEFAULTS – das bisherige Aussehen.
-    pdf.py rendert alle vier Belegarten aus gemeinsamen Bausteinen.
+    PDF-Download nimmt ?template=<id>, und ab der ersten Vorlage fragt die
+    Liste beim Klick nach (früher erst ab zweien – wer nur eine Vorlage
+    hatte, sah beim Beleg nie eine Auswahl). Ohne Vorlage gilt pdf.DEFAULTS –
+    das bisherige Aussehen. pdf.py rendert alle vier Belegarten aus
+    gemeinsamen Bausteinen.
 [X] Layout „Formular“ als zweites Aussehen einer Vorlage (pdf_form.py, Spalte
     pdf_templates.layout): der Firmenvordruck 1:1 nach dem alten
     Excel-Muster – Kopfbalken, Absender rechts oben, die vier Ankreuzfelder
@@ -189,7 +191,10 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Fußtext zum Kleingedruckten. Lange Belege laufen auf weiteren Seiten
     weiter, die Summen stehen auf der letzten. Einen GiroCode gibt es in
     diesem Layout nicht – dafür stehen Zahlungsziel, Skonto und der
-    Zahlungsstand unten im Kleingedruckten.
+    Zahlungsstand unten im Kleingedruckten. Eine fertige Vorlage dafür
+    („Mechatronik Neubauer e.U.“) legt der Start an (crud.seed_pdf_templates),
+    solange es keine Vordruck-Vorlage gibt – sonst müsste sie jeder erst von
+    Hand anlegen, um den Vordruck überhaupt wählen zu können.
 [ ] Wiederkehrende Rechnungen
 [ ] Freigabe-Workflow
 [ ] Mehrwährungsfähigkeit (bisher nur EUR)
@@ -287,11 +292,14 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Die Zähler liegen wie Login-Sperre und Rate-Limit im Prozess.
 [X] Monitoring aktualisiert sich auf Wunsch selbst (app.js,
     startMonitoringAuto): Auswahl „Automatisch“ mit 1, 2 oder 10 Sekunden
-    bzw. einer Minute, Vorgabe bleibt „aus“. Die Wahl steht im localStorage
-    (rechnung.monitoring.interval), der Takt läuft nur in der
-    Monitoring-Ansicht und ruht in einem Tab im Hintergrund; ein noch
-    laufender Abruf wird nicht vom nächsten überholt. Neben der Auswahl
-    steht, wann die Zahlen zuletzt geholt wurden.
+    bzw. einer Minute, Vorgabe bleibt „aus“, direkt neben dem Knopf
+    „Aktualisieren“. Die Wahl steht im localStorage
+    (rechnung.monitoring.interval). Der Takt ist eine Kette aus setTimeout:
+    der nächste Abruf wird erst gestellt, wenn der vorige durch ist – so
+    stapelt sich nichts, und ein Tab, der im Hintergrund ausgesetzt hat,
+    läuft beim Zurückkommen weiter (visibilitychange holt sofort nach).
+    Daneben steht, wann die Zahlen zuletzt kamen, in welchem Takt sie
+    nachkommen und ob ein Abruf fehlgeschlagen ist.
 [ ] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
     `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
     mehrere Repliken nicht überstehen)
@@ -335,6 +343,20 @@ Sonst ist hier nichts geparkt.
 --------------------------------------------------------------------------------
 10. CHANGELOG
 --------------------------------------------------------------------------------
+2026-08-31, achter Durchgang
+  * Die Vordruck-Vorlage „Mechatronik Neubauer e.U.“ legt der Start selbst an
+    und die Auswahl beim Beleg erscheint schon ab einer Vorlage – vorher war
+    der Vordruck bei der Rechnung nirgends zu sehen (Abschnitt 3).
+  * Das selbsttätige Monitoring steht jetzt neben „Aktualisieren“, hält den
+    Takt über eine setTimeout-Kette durch und zeigt Stand, Takt und
+    fehlgeschlagene Abrufe an (Abschnitt 6).
+  * Knopfleisten sind wieder so breit wie die Karte: die Klasse .bar galt
+    zugleich für die Balken im Dashboard-Diagramm (width: 70 %), weshalb
+    rechts stehende Bedienelemente umgebrochen sind. Der Diagrammbalken heißt
+    jetzt .chart-bar – und hat mit background: var(--primary) wieder eine
+    Farbe (bisher stand dort das unvollständige var()).
+  * Teststand: 218 Backend- und 80 Frontend-Tests.
+
 2026-08-31, siebter Durchgang
   * Monitoring aktualisiert sich auf Wunsch selbst – 1, 2, 10 Sekunden oder
     eine Minute, gemerkt im Browser (Abschnitt 6).
