@@ -1,3 +1,18 @@
+# Aufbau der Container:
+#
+#   proxy (rechnung_proxy)   nginx, 80/443, Weiche nach Hostname
+#     |
+#     +--> web (rechnung_web)   nginx: /static von der Platte,
+#     |        |                alles andere weiter an app
+#     |        v
+#     +--> app (rechnung_app)   uvicorn/FastAPI – Sitzung, CSRF, API, PDF
+#              |
+#              +--> db (rechnung_db), mailhog (rechnung_mailhog)
+#
+# Jeder Container schreibt sein Log zusaetzlich zum Docker-Journal in ein
+# eigenes Verzeichnis unter ./logs/. Diese Verzeichnisse muessen fuer den
+# jeweiligen Container-Benutzer beschreibbar sein – scripts/prepare-logs.sh
+# legt sie passend an, die setup-Skripte rufen es auf.
 services:
   db:
     image: postgres:16-alpine
@@ -9,15 +24,30 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-rechnung}
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ./logs/db:/var/log/postgresql
+    # logging_collector schreibt in eine Datei statt auf stderr;
+    # log_min_messages entspricht der Stufe aus LOG_LEVEL (siehe README).
+    command:
+      - postgres
+      - -c
+      - logging_collector=on
+      - -c
+      - log_directory=/var/log/postgresql
+      - -c
+      - log_filename=postgresql-%Y-%m-%d.log
+      - -c
+      - log_min_messages=${PG_LOG_LEVEL:-warning}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rechnung} -d ${POSTGRES_DB:-rechnung}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  web:
+  # Die Anwendung selbst. Hiess frueher `web` und lief im selben Container
+  # wie die Statik – die liegt jetzt im nginx davor.
+  app:
     build: ./backend
-    container_name: rechnung_web
+    container_name: rechnung_app
     restart: unless-stopped
     # Läuft nicht als root. Die Standard-UID entspricht dem Benutzer aus dem
     # Dockerfile; scripts/setup-*.sh tragen hier die UID/GID des Host-Benutzers
@@ -49,6 +79,8 @@ services:
       RATE_LIMIT_LOGIN: ${RATE_LIMIT_LOGIN:-20}
       HSTS_ENABLED: ${HSTS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Logdatei auf der Platte, zusaetzlich zur Standardausgabe.
+      LOG_DIR: /logs
       ALERTS_ENABLED: ${ALERTS_ENABLED:-false}
       ALERT_ERROR_THRESHOLD: ${ALERT_ERROR_THRESHOLD:-10}
       ALERT_LOGIN_THRESHOLD: ${ALERT_LOGIN_THRESHOLD:-20}
@@ -58,18 +90,45 @@ services:
       SLOW_REQUEST_SECONDS: ${SLOW_REQUEST_SECONDS:-2}
     volumes:
       - ./backups:/backups:ro
+      - ./logs/app:/logs
+
+  # Web-Container: liefert /static direkt von der Platte, alles andere geht
+  # an `app`. Dadurch ist eine Aenderung an app.js/styles.css sofort da und
+  # braucht keinen Neubau des App-Images mehr.
+  web:
+    image: nginx:alpine
+    container_name: rechnung_web
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Nur diese Namen ersetzt envsubst in der Vorlage – $host, $upstream und
+      # die uebrigen nginx-Variablen bleiben dadurch unangetastet.
+      NGINX_ENVSUBST_FILTER: "^(LOG_LEVEL|NGINX_)"
+    volumes:
+      - ./nginx/web.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/05-log-level.envsh:/docker-entrypoint.d/05-log-level.envsh:ro
+      - ./backend/app/static:/srv/static:ro
+      - ./logs/web:/var/log/nginx
     ports:
-      - "${WEB_PORT:-8000}:8000"
+      - "${WEB_PORT:-8000}:80"
 
   # SMTP-Testserver: nimmt Mails an und zeigt sie im Web-UI (kein echter Versand)
   mailhog:
     image: mailhog/mailhog:latest
     container_name: rechnung_mailhog
     restart: unless-stopped
+    # MailHog kennt keine Logdatei-Option, deshalb der Umweg ueber tee: die
+    # Ausgabe bleibt im Docker-Journal und liegt zusaetzlich auf der Platte.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["MailHog 2>&1 | tee -a /logs/mailhog.log"]
+    volumes:
+      - ./logs/mailhog:/logs
     ports:
       - "${MAILHOG_UI_PORT:-8025}:8025"   # Web-UI: http://localhost:8025
 
-  # Reverse-Proxy: rechnungen.localhost -> App, mail.localhost -> MailHog
+  # Reverse-Proxy: rechnungen.localhost -> Web-Container, mail.localhost -> MailHog
   proxy:
     image: nginx:alpine
     container_name: rechnung_proxy
@@ -77,12 +136,17 @@ services:
     depends_on:
       - web
       - mailhog
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NGINX_ENVSUBST_FILTER: "^(LOG_LEVEL|NGINX_)"
     ports:
       - "${PROXY_PORT:-80}:80"
       - "${PROXY_HTTPS_PORT:-443}:443"
     volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/proxy.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/05-log-level.envsh:/docker-entrypoint.d/05-log-level.envsh:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      - ./logs/proxy:/var/log/nginx
 
   # Automatisches tägliches Datenbank-Backup (pg_dump), hält die letzten 14
   backup:
@@ -99,10 +163,11 @@ services:
       PGDATABASE: ${POSTGRES_DB:-rechnung}
     volumes:
       - ./backups:/backups
+      - ./logs/backup:/logs
     command:
       - sh
       - -c
-      - 'while true; do ts=$$(date +%Y%m%d_%H%M%S); echo "[backup] $$ts"; if pg_dump > /backups/rechnung_$$ts.sql 2> /backups/last_error.log; then gzip -f /backups/rechnung_$$ts.sql; else echo "[backup] FEHLER - siehe last_error.log"; fi; ls -1t /backups/*.sql.gz 2>/dev/null | tail -n +15 | xargs -r rm -f; sleep 86400; done'
+      - 'while true; do ts=$$(date +%Y%m%d_%H%M%S); echo "[backup] $$ts"; if pg_dump > /backups/rechnung_$$ts.sql 2> /backups/last_error.log; then gzip -f /backups/rechnung_$$ts.sql; else echo "[backup] FEHLER - siehe last_error.log"; fi; ls -1t /backups/*.sql.gz 2>/dev/null | tail -n +15 | xargs -r rm -f; sleep 86400; done 2>&1 | tee -a /logs/backup.log'
 
 volumes:
   db_data:

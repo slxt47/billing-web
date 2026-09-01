@@ -1,0 +1,62 @@
+# Web-Container (rechnung_web).
+#
+# Er liefert die Statik (/static) direkt von der Platte und reicht alles
+# andere an den App-Container (rechnung_app, uvicorn/FastAPI) weiter. Vorher
+# lag beides im selben Container; die Statik lag im Image und war erst nach
+# einem Neubau aktuell.
+#
+# Die Datei ist eine Vorlage: ${NGINX_LOG_LEVEL} setzt 05-log-level.envsh aus
+# LOG_LEVEL, bevor das nginx-Image die Vorlage nach conf.d ausfuellt.
+
+server {
+    listen 80;
+    server_name _;
+
+    # Docker-DNS zur Laufzeit: nginx startet damit auch, wenn der
+    # App-Container gerade noch hochfaehrt (ein fest aufgeloester Upstream
+    # laesst nginx beim Start abbrechen).
+    resolver 127.0.0.11 valid=10s;
+
+    access_log /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log ${NGINX_LOG_LEVEL};
+
+    # Logo-Upload und Backup-Wiederherstellung gehen durch diesen Container.
+    client_max_body_size 25m;
+
+    # Dieselben Sicherheits-Header, die security.py sonst auf jede Antwort
+    # setzt. Fuer die Statik laeuft diese Middleware nicht mehr mit, weil die
+    # Dateien hier und nicht mehr in der App liegen.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
+
+    # Statik von der Platte. Bewusst ohne `expires`: die Auslieferung soll
+    # sich genauso verhalten wie vorher ueber StaticFiles (ETag und
+    # Last-Modified, kein max-age), sonst haengt nach einer Aenderung an
+    # app.js noch Minuten die alte Fassung im Browser.
+    location /static/ {
+        alias /srv/static/;
+    }
+
+    location = /favicon.ico {
+        alias /srv/static/favicon.ico;
+        access_log off;
+    }
+
+    # Alles Uebrige – auch /, /login, /logout, /datenschutz und /api – macht
+    # weiterhin die App: dort haengen Sitzung, CSRF und die Anmeldepruefung.
+    location / {
+        set $upstream app:8000;
+        proxy_pass http://$upstream;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}

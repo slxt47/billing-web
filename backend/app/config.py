@@ -60,7 +60,15 @@ HSTS_ENABLED = _flag("HSTS_ENABLED", "true")
 HSTS_MAX_AGE = int(os.getenv("HSTS_MAX_AGE", str(180 * 24 * 3600)))
 
 # --- Logging --------------------------------------------------------------
+# LOG_LEVEL ist die Stufe beim Start. Im laufenden Betrieb lässt sie sich in
+# der Weboberfläche (Monitoring) umstellen; die Auswahl liegt in der Datenbank
+# (app_settings) und übersteht einen Neustart – siehe logging_setup.set_level.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# Verzeichnis für das Logfile auf der Platte (docker-compose hängt hier
+# ./logs/app ein). Leer = nur Standardausgabe, so laufen auch die Tests.
+LOG_DIR = os.getenv("LOG_DIR", "")
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "5"))
 
 # --- API-Paginierung ------------------------------------------------------
 # Obergrenze für ?limit=… bei Listen-Endpunkten. Ohne limit liefert die API

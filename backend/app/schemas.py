@@ -423,3 +423,10 @@ class PdfTemplateOut(PdfTemplateIn):
 
     class Config:
         from_attributes = True
+
+
+# --------------------------- Betrieb / Log-Stufe -------------------------
+class LogLevelIn(BaseModel):
+    """Umschalten der Log-Stufe im laufenden Betrieb (Monitoring-Ansicht).
+    Welche Namen zulässig sind, prüft logging_setup.set_level."""
+    level: str = Field(..., max_length=20)

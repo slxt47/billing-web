@@ -1,0 +1,19 @@
+#!/bin/sh
+# Uebersetzt die App-Log-Stufe (LOG_LEVEL) in die Schreibweise von nginx und
+# stellt sie als NGINX_LOG_LEVEL fuer die Konfigurationsvorlage bereit.
+#
+# Das nginx-Image liest Dateien in /docker-entrypoint.d mit der Endung .envsh
+# per `.` ein statt sie auszufuehren – nur deshalb ueberlebt die Zuweisung bis
+# zum Schritt 20-envsubst-on-templates.sh, der die Vorlage ausfuellt.
+#
+# nginx kennt kein "debug" ohne eigens gebautes nginx-debug-Binary; DEBUG
+# landet deshalb auf der ausfuehrlichsten Stufe, die das normale Binary kann.
+case "$(echo "${LOG_LEVEL:-INFO}" | tr '[:lower:]' '[:upper:]')" in
+  DEBUG)    NGINX_LOG_LEVEL=info ;;
+  INFO)     NGINX_LOG_LEVEL=info ;;
+  WARNING)  NGINX_LOG_LEVEL=warn ;;
+  ERROR)    NGINX_LOG_LEVEL=error ;;
+  CRITICAL) NGINX_LOG_LEVEL=crit ;;
+  *)        NGINX_LOG_LEVEL=warn ;;
+esac
+export NGINX_LOG_LEVEL

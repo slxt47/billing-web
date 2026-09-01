@@ -28,6 +28,11 @@ VALID_DN_STATUS = {models.DN_OPEN, models.DN_DONE, models.DN_CANCELLED}
 VALID_CN_STATUS = {models.CN_OPEN, models.CN_SETTLED, models.CN_CANCELLED}
 
 
+# Schlüssel in app_settings, unter dem die in der Oberfläche gewählte
+# Log-Stufe liegt (siehe /api/admin/log-level).
+LOG_LEVEL_KEY = "log_level"
+
+
 @app.on_event("startup")
 def on_startup():
     logging_setup.setup_logging()
@@ -36,12 +41,24 @@ def on_startup():
     try:
         crud.seed_users(db)
         crud.seed_pdf_templates(db)
+        # In der Oberfläche gewählte Stufe schlägt die Umgebungsvariable –
+        # sonst wäre die Auswahl nach jedem Neustart wieder weg. Ein
+        # unbrauchbarer Wert in der Datenbank darf den Start nicht verhindern.
+        stored = crud.get_app_setting(db, LOG_LEVEL_KEY)
+        if stored:
+            try:
+                logging_setup.set_level(stored)
+            except ValueError:
+                logging_setup.log.warning("ignoring stored log level",
+                                          extra={"fields": {"value": stored}})
     finally:
         db.close()
     logging_setup.log.info("startup complete", extra={"fields": {
         "csrf": config.CSRF_ENABLED,
         "rate_limit": config.RATE_LIMIT_REQUESTS,
         "https_only_cookies": config.SESSION_HTTPS_ONLY,
+        "log_level": logging_setup.current_level(),
+        "log_dir": config.LOG_DIR or "-",
     }})
 
 
@@ -1173,6 +1190,34 @@ def metrics_prometheus(admin: models.User = Depends(require_admin),
     """Dieselben Zahlen im Prometheus-Textformat zum Abholen."""
     return Response(content=monitoring.prometheus(monitoring.snapshot(db)),
                     media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.get("/api/admin/log-level")
+def get_log_level(admin: models.User = Depends(require_admin)):
+    """Stufe, mit der die App gerade läuft, plus die wählbaren Stufen."""
+    return {"level": logging_setup.current_level(),
+            "levels": list(logging_setup.LEVELS),
+            "boot_level": config.LOG_LEVEL}
+
+
+@app.post("/api/admin/log-level")
+def set_log_level(body: schemas.LogLevelIn,
+                  admin: models.User = Depends(require_admin),
+                  db: Session = Depends(get_db)):
+    """Log-Stufe umschalten: wirkt sofort und wird gespeichert.
+
+    Gespeichert wird in app_settings, damit die Auswahl einen Neustart
+    übersteht – beim Start liest on_startup() sie wieder ein.
+    """
+    try:
+        level = logging_setup.set_level(body.level)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    crud.set_app_setting(db, LOG_LEVEL_KEY, level)
+    crud.log_action(db, admin.username, "log_level", "app", detail=level)
+    logging_setup.log.warning("log level changed", extra={"fields": {
+        "level": level, "user": admin.username}})
+    return {"level": level}
 
 
 @app.post("/api/admin/metrics/test-alert")
