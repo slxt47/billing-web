@@ -53,6 +53,10 @@ ensure_app_user || true
 own_app_files "$PWD" || true
 
 echo
+echo "-- Log-Verzeichnisse --"
+scripts/prepare-logs.sh "$PWD"
+
+echo
 echo "Baue und starte die Docker-Container..."
 sudo docker-compose up -d --build
 echo "✓ Test-Umgebung läuft."

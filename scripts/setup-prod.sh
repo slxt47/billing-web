@@ -117,6 +117,10 @@ ensure_app_user || true
 own_app_files "$PWD" || true
 
 echo
+echo "-- Log-Verzeichnisse --"
+scripts/prepare-logs.sh "$PWD"
+
+echo
 echo "=== Fertig ==="
 echo "Änderungen stehen in .env. Zum Anwenden:"
 echo "  docker-compose up -d --build"
