@@ -7,7 +7,8 @@ Erste Anlaufstelle ist immer:
 
 ```bash
 docker compose ps                 # welcher Container läuft (nicht)?
-docker compose logs -f web        # Anwendungs-Log (JSON, eine Zeile je Request)
+docker compose logs -f app        # Anwendungs-Log (JSON, eine Zeile je Request)
+tail -f logs/app/app.log          # dasselbe Log als Datei auf der Platte
 ```
 
 Jede Antwort der App trägt den Header `X-Request-ID`, und jede Fehlermeldung
@@ -15,8 +16,33 @@ enthält dieselbe ID im Feld `request_id`. Damit lässt sich ein Screenshot
 direkt im Log wiederfinden:
 
 ```bash
-docker compose logs web | grep 9a23489ad116
+docker compose logs app | grep 9a23489ad116
+grep 9a23489ad116 logs/app/app.log      # oder direkt in der Logdatei
 ```
+
+### Wo liegen die Logs?
+Jeder Container schreibt zusätzlich zum Docker-Journal in ein eigenes
+Verzeichnis unter `./logs/`:
+
+```
+logs/app/app.log                   Anwendung (JSON)
+logs/web/access.log, error.log     nginx vor der App
+logs/proxy/access.log, error.log   nginx ganz aussen
+logs/db/postgresql-*.log           PostgreSQL
+logs/mailhog/mailhog.log
+logs/backup/backup.log
+```
+
+Fehlt ein Verzeichnis oder bleibt eine Datei leer, hat der Container kein
+Schreibrecht. Nachziehen mit `scripts/prepare-logs.sh` und den betroffenen
+Container neu starten. Die App hält das nicht auf – sie meldet
+`log directory not writable` und loggt weiter auf die Standardausgabe.
+
+### Mehr oder weniger im Log sehen
+Die Stufe der App lässt sich im Reiter „Monitoring" unter „Log-Stufe"
+umschalten (DEBUG/INFO/WARNING/ERROR). Sie wirkt sofort und übersteht einen
+Neustart. Die übrigen Container ziehen ihre Stufe beim Start aus `LOG_LEVEL`
+bzw. `PG_LOG_LEVEL` in der `.env` – dort ändern und neu starten.
 
 ---
 
@@ -109,7 +135,8 @@ docker exec -it rechnung_db psql -U rechnung -d rechnung \
 Die Antwort enthält eine `request_id`. Damit den Traceback im Log suchen:
 
 ```bash
-docker compose logs web | grep '"level": "ERROR"' | tail -5
+docker compose logs app | grep '"level": "ERROR"' | tail -5
+grep '"level": "ERROR"' logs/app/app.log | tail -5
 ```
 
 ### 502 „E-Mail konnte nicht gesendet werden“
@@ -132,7 +159,7 @@ werden ins Image kopiert, ein `docker compose up -d` ohne `--build` liefert
 also weiterhin den alten Stand:
 
 ```bash
-docker compose up -d --build web
+docker compose up -d --build app
 ```
 
 ### „Wiederhergestellt: nicht gespeicherte Eingaben vom …“ – wie werde ich das los?
@@ -190,14 +217,14 @@ sudo usermod -aG rechnung "$USER"            # eigenen Account in die Gruppe (ne
 Prüfen:
 
 ```bash
-docker compose exec web id      # erwartet: uid=10001(rechnung) …
+docker compose exec app id      # erwartet: uid=10001(rechnung) …
 ```
 
 Steht dort `uid=0(root)`, fehlt `APP_UID`/`APP_GID` in der `.env` **und** der
 `user:`-Eintrag in `docker-compose.yml` wurde entfernt. Neu bauen:
 
 ```bash
-docker compose up -d --build web
+docker compose up -d --build app
 ```
 
 ### Backup-Wiederherstellung schlägt fehl
@@ -237,7 +264,7 @@ Der SMTP-Server war nicht erreichbar oder hat die Anmeldung abgelehnt. Die
 Originalmeldung steht in der Antwort und im Log. Von Hand testen:
 
 ```bash
-docker compose exec web python -c "
+docker compose exec app python -c "
 import smtplib, os
 s = smtplib.SMTP(os.getenv('SMTP_HOST'), int(os.getenv('SMTP_PORT')))
 s.ehlo(); print(s.esmtp_features); s.quit()"

@@ -2,6 +2,7 @@
 .env
 nginx/certs/
 backups/
+logs/
 __pycache__/
 *.pyc
 .pytest_cache/

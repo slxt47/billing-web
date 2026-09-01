@@ -205,6 +205,20 @@ class Settings(Base):
     logo_mime = Column(String(50), nullable=True)
 
 
+class AppSetting(Base):
+    """Technische Einstellungen der App als Schlüssel/Wert.
+
+    Bewusst getrennt von `settings`: dort stehen die Firmendaten, die über
+    /api/settings bearbeitet werden und auf jedem PDF landen. Hier steht, was
+    den Betrieb angeht – bisher nur die Log-Stufe (Schlüssel „log_level"),
+    damit die in der Weboberfläche gewählte Stufe einen Neustart übersteht.
+    """
+    __tablename__ = "app_settings"
+
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False, default="")
+
+
 class InvoiceItem(Base):
     __tablename__ = "invoice_items"
 

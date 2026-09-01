@@ -48,20 +48,26 @@ nav button {
   border-radius: 6px;
 }
 nav button.active, nav button:hover { background: var(--primary); color: #fff; }
-/* Der Benutzername darf schrumpfen und notfalls abgeschnitten werden: mit
-   flex: 0 0 auto drückte ein langer Name auf einem schmalen Gerät die
-   Menüleiste aus dem Bild und die ganze Seite scrollte seitwärts. */
+/* Der Benutzername ist der Knopf, hinter dem „Abmelden“ steckt. Er darf
+   schrumpfen und notfalls abgeschnitten werden: mit flex: 0 0 auto drückte
+   ein langer Name auf einem schmalen Gerät die Menüleiste aus dem Bild und
+   die ganze Seite scrollte seitwärts. */
+.nav-user-anchor { flex: 0 1 auto; min-width: 0; }
 .nav-user {
-  color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem;
-  flex: 0 1 auto; min-width: 0; overflow: hidden;
+  color: var(--muted); font-size: 0.9rem; padding: 0.4rem 0.5rem;
+  max-width: 100%; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-nav a#logout {
-  color: var(--muted); text-decoration: none; font-size: 0.9rem;
-  padding: 0.5rem 0.8rem; border-radius: 6px; border: 1px solid var(--border);
-  flex: 0 0 auto;
+.nav-user:hover, .nav-user[aria-expanded="true"] {
+  background: var(--card-2); color: var(--text);
 }
-nav a#logout:hover { color: #fff; border-color: var(--red); background: var(--red); }
+/* Das Abmelden-Menü klappt zum rechten Rand hin auf, nicht über ihn hinaus. */
+.nav-user-menu { left: auto; right: 0; min-width: 9rem; }
+.nav-user-menu a#logout {
+  display: block; color: var(--text); text-decoration: none;
+  font-size: 0.9rem; padding: 0.5rem 0.6rem; border-radius: 6px;
+}
+.nav-user-menu a#logout:hover { color: #fff; background: var(--red); }
 
 /* Kernpunkte der Navigation: immer eine Zeile. Reicht die Breite nicht,
    scrollt die Leiste seitwärts statt umzubrechen – ein Fenster mit weniger

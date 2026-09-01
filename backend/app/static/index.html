@@ -41,8 +41,18 @@
       </span>
       <button id="theme-toggle" class="icon-btn" title="Hell/Dunkel umschalten"
               aria-label="Hell/Dunkel umschalten">🌙</button>
-      <span class="nav-user">👤 <span id="current-user">…</span></span>
-      <a id="logout" href="/logout" title="Abmelden">Abmelden</a>
+      <!-- Der Benutzername ist ein Knopf: ein Klick klappt ein kleines Menü mit
+           „Abmelden“ auf. Vorher stand der Abmelden-Knopf fest in der Leiste
+           und drückte auf schmalen Geräten den aktiven Menüpunkt aus dem Bild
+           (siehe .nav-user in styles.css, TODO.md Abschnitt „Oberfläche“). -->
+      <span class="popover-anchor nav-user-anchor">
+        <button type="button" id="nav-user-toggle" class="nav-user"
+                aria-haspopup="true" aria-expanded="false">
+          👤 <span id="current-user">…</span></button>
+        <div id="nav-user-menu" class="popover nav-user-menu" role="menu" hidden>
+          <a id="logout" href="/logout" role="menuitem">Abmelden</a>
+        </div>
+      </span>
     </nav>
   </header>
 
@@ -51,7 +61,7 @@
     <section id="view-dashboard">
       <h2>Dashboard</h2>
       <div class="kpi-grid" id="kpi-grid"></div>
-      <h3>Umsatz der letzten 6 Monate</h3>
+      <h3>Umsatz der letzten Monate</h3>
       <div id="chart" class="chart"></div>
     </section>
 
@@ -563,6 +573,26 @@
         <button type="button" id="monitoring-prom" class="secondary">⬇️ Prometheus-Format</button>
         <button type="button" id="monitoring-test-alert" class="secondary">✉️ Probealarm senden</button>
         <span id="monitoring-msg"></span>
+      </div>
+
+      <h3>Log-Stufe</h3>
+      <p class="hint">Gilt sofort für die laufende App und übersteht einen
+        Neustart. Die übrigen Container (nginx, Postgres, Backup) übernehmen
+        dieselbe Stufe beim Start aus <code>LOG_LEVEL</code> in der
+        <code>.env</code> – dort ist sie nachzuziehen, wenn sie mitwandern
+        soll. Die Logdateien liegen auf der Platte unter <code>./logs/</code>,
+        je Container ein eigenes Verzeichnis.</p>
+      <div class="bar">
+        <label class="inline" for="log-level">Stufe
+          <select id="log-level">
+            <option value="DEBUG">DEBUG – alles, auch Diagnose</option>
+            <option value="INFO">INFO – jede Anfrage (Vorgabe)</option>
+            <option value="WARNING">WARNING – nur Auffälliges</option>
+            <option value="ERROR">ERROR – nur Fehler</option>
+          </select>
+        </label>
+        <span id="log-level-boot" class="hint"></span>
+        <span id="log-level-msg"></span>
       </div>
       <div class="kpi-grid" id="monitoring-kpis"></div>
       <h3>Alarme</h3>

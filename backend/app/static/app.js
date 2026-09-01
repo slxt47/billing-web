@@ -124,7 +124,7 @@ function show(view) {
   if (view === "history") { historyNotice(""); loadHistory(); }
   if (view === "credit") loadCreditNotes();
   if (view === "reports") loadReports();
-  if (view === "monitoring") { loadMonitoring(); startMonitoringAuto(); }
+  if (view === "monitoring") { loadMonitoring(); loadLogLevel(); startMonitoringAuto(); }
   if (view === "customers") loadCustomers();
   if (view === "products") loadProducts();
   if (view === "settings") loadSettings();
@@ -169,6 +169,31 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !navMoreMenu.hidden) toggleNavMoreMenu(false);
 });
 
+// ---------------------- Benutzer-Menü (Abmelden) -------------------------
+// "Abmelden" steht nicht mehr fest in der Leiste, sondern hinter dem
+// Benutzernamen: ein Klick klappt es auf. Der feste Knopf war auf schmalen
+// Geräten breiter als der Platz, der dann für den aktiven Menüpunkt fehlte –
+// der wurde abgeschnitten. Gleiches Auf-/Zu-Muster wie beim Burger-Menü.
+const navUserToggle = $("#nav-user-toggle");
+const navUserMenu = $("#nav-user-menu");
+
+function toggleNavUserMenu(open) {
+  navUserMenu.hidden = !open;
+  navUserToggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+navUserToggle.onclick = (e) => {
+  e.stopPropagation();
+  toggleNavUserMenu(navUserMenu.hidden);
+};
+document.addEventListener("click", (e) => {
+  if (!navUserMenu.hidden && !navUserMenu.contains(e.target) && e.target !== navUserToggle) {
+    toggleNavUserMenu(false);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !navUserMenu.hidden) toggleNavUserMenu(false);
+});
+
 // Auf dem Handy bleibt nur der aktive Menüpunkt in der Leiste, alle anderen
 // Kernpunkte wandern zusätzlich zu den Verwaltungspunkten ins Burger-Menü
 // (TODO.md, Abschnitt "OBERFLÄCHE / RESPONSIVE DESIGN").
@@ -176,15 +201,19 @@ document.addEventListener("keydown", (e) => {
 const MOBILE_NAV_BREAKPOINT = 600;
 const navPrimary = $("#nav-primary");
 const PRIMARY_NAV_IDS = [...navPrimary.querySelectorAll("button")].map((b) => b.id);
-const navMoreAnchor = $("#nav-settings"); // erster Verwaltungspunkt: Einfügepunkt davor
+// Verwaltungspunkte, so wie sie in index.html im Burger-Menü stehen. Sie
+// wandern nie in die Kernpunkt-Reihenfolge – nur der gerade aktive rückt auf
+// dem Handy sichtbar in die Leiste (siehe syncMobileNav).
+const MORE_NAV_IDS = [...navMoreMenu.querySelectorAll("button")].map((b) => b.id);
 
-/** Die ausgelagerten Kernpunkte im Burger-Menü in ihre gewohnte Reihenfolge
- *  bringen – nicht in die, in der sie zufällig ausgelagert wurden. Die
- *  Verwaltungspunkte ab #nav-settings bleiben dabei unberührt. */
+/** Das Burger-Menü in seine feste Reihenfolge bringen: erst die (ausgelagerten)
+ *  Kernpunkte in ihrer gewohnten Reihenfolge, dann die Verwaltungspunkte –
+ *  nicht in der Reihenfolge, in der sie zufällig hereingewandert sind.
+ *  appendChild auf einen schon enthaltenen Knoten schiebt ihn nur ans Ende. */
 function sortMoreMenu() {
-  for (const id of PRIMARY_NAV_IDS) {
+  for (const id of [...PRIMARY_NAV_IDS, ...MORE_NAV_IDS]) {
     const btn = $(`#${id}`);
-    if (btn && btn.parentElement === navMoreMenu) navMoreMenu.insertBefore(btn, navMoreAnchor);
+    if (btn && btn.parentElement === navMoreMenu) navMoreMenu.appendChild(btn);
   }
 }
 
@@ -202,7 +231,7 @@ function trimPrimaryNav(active) {
     if (navPrimary.scrollWidth <= navPrimary.clientWidth) break;
     const spare = [...navPrimary.children].reverse().find((btn) => btn !== active);
     if (!spare) break;
-    navMoreMenu.insertBefore(spare, navMoreAnchor);
+    navMoreMenu.appendChild(spare);
     // Ohne Burger-Knopf käme man an einen ausgelagerten Punkt nicht mehr heran.
     navMoreToggle.hidden = false;
     moved = true;
@@ -214,15 +243,31 @@ function trimPrimaryNav(active) {
 function syncMobileNav() {
   const mobile = window.innerWidth <= MOBILE_NAV_BREAKPOINT;
   const active = document.querySelector("#nav-primary button.active, #nav-more-menu button.active");
+  // Kernpunkte: auf dem Handy bleibt nur der aktive in der Leiste, der Rest
+  // wandert ins Burger-Menü; auf breiten Bildschirmen stehen alle in der Leiste.
   for (const id of PRIMARY_NAV_IDS) {
     const btn = $(`#${id}`);
     if (!btn) continue;
     if (!mobile || btn === active) {
       navPrimary.appendChild(btn);
     } else if (btn.parentElement !== navMoreMenu) {
-      navMoreMenu.insertBefore(btn, navMoreAnchor);
+      navMoreMenu.appendChild(btn);
     }
   }
+  // Verwaltungspunkte: stehen sonst nur im Burger-Menü, aber der gerade aktive
+  // rückt auf dem Handy in die Leiste – sonst zeigt die Leiste dort gar keinen
+  // aktiven Punkt und man sieht nicht, in welcher Verwaltung man steckt.
+  for (const id of MORE_NAV_IDS) {
+    const btn = $(`#${id}`);
+    if (!btn) continue;
+    if (mobile && btn === active) {
+      navPrimary.appendChild(btn);
+    } else if (btn.parentElement !== navMoreMenu) {
+      navMoreMenu.appendChild(btn);
+    }
+  }
+  sortMoreMenu();
+
   // Ohne Admin-Rechte und auf einem breiten Bildschirm gibt es nichts, was
   // das Burger-Menü zeigen könnte; auf dem Handy braucht es jeder, um an die
   // ausgelagerten Kernpunkte zu kommen.
@@ -2448,6 +2493,37 @@ $("#monitoring-test-alert").onclick = async () => {
   msg.textContent = res.ok ? `✓ Probealarm an ${data.to} gesendet.`
                            : "Fehler: " + (data.detail || res.status);
   msg.className = res.ok ? "ok" : "err";
+};
+
+// ---------------------- Log-Stufe ----------------------
+// Die Stufe wird nicht im Takt des Monitorings mitgeladen: sie ändert sich nur,
+// wenn sie hier jemand ändert, und ein Abruf je Sekunde würde die eigene
+// Auswahl mitten im Aufklappen überschreiben.
+async function loadLogLevel() {
+  const res = await fetch("/api/admin/log-level");
+  if (!res.ok) return;
+  const data = await res.json();
+  $("#log-level").value = data.level;
+  $("#log-level-boot").textContent =
+    `Stufe beim Start: ${data.boot_level} (LOG_LEVEL in der .env)`;
+}
+
+$("#log-level").onchange = async () => {
+  const msg = $("#log-level-msg");
+  const res = await fetch("/api/admin/log-level", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level: $("#log-level").value }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    msg.textContent = `✓ Log-Stufe steht jetzt auf ${data.level}.`;
+    msg.className = "ok";
+  } else {
+    msg.textContent = "Fehler: " + (data.detail || res.status);
+    msg.className = "err";
+    loadLogLevel();          // Anzeige zurück auf die tatsächliche Stufe
+  }
 };
 
 // ---------------------- Firmendaten / Logo ----------------------

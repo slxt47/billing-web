@@ -1,9 +1,17 @@
-# Reverse-Proxy: leitet nach Hostname an die jeweiligen Container weiter.
-# Upstreams werden über Variablen + Docker-DNS (127.0.0.11) zur Laufzeit
-# aufgelöst, damit nginx auch bei kurz nicht erreichbaren Zielen sauber startet.
+# Reverse-Proxy (rechnung_proxy): leitet nach Hostname an die jeweiligen
+# Container weiter. Upstreams werden ueber Variablen + Docker-DNS (127.0.0.11)
+# zur Laufzeit aufgeloest, damit nginx auch bei kurz nicht erreichbaren Zielen
+# sauber startet.
+#
+# Seit der Trennung von App und Statik zeigt der Standard-Upstream auf den
+# Web-Container (nginx, Port 80) statt direkt auf uvicorn. Der Weg ist also
+# proxy -> web -> app.
+#
+# Die Datei ist eine Vorlage: ${NGINX_LOG_LEVEL} setzt 05-log-level.envsh aus
+# LOG_LEVEL, bevor das nginx-Image die Vorlage nach conf.d ausfuellt.
 
 map $host $upstream {
-    default              web:8000;
+    default              web:80;
     mail.localhost       mailhog:8025;
 }
 
@@ -13,6 +21,11 @@ server {
     server_name rechnungen.localhost mail.localhost;
 
     resolver 127.0.0.11 valid=10s;
+
+    access_log /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log ${NGINX_LOG_LEVEL};
+
+    client_max_body_size 25m;
 
     location / {
         set $up $upstream;
@@ -36,6 +49,11 @@ server {
     ssl_certificate_key /etc/nginx/certs/localhost.key;
 
     resolver 127.0.0.11 valid=10s;
+
+    access_log /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log ${NGINX_LOG_LEVEL};
+
+    client_max_body_size 25m;
 
     location / {
         set $up $upstream;

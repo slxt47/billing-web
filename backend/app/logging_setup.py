@@ -20,6 +20,8 @@ import logging
 import time
 import uuid
 from contextvars import ContextVar
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -52,11 +54,49 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def setup_logging() -> None:
-    handler = logging.StreamHandler()
+# Stufen, die sich in der Weboberfläche umschalten lassen. CRITICAL fehlt
+# bewusst: eine App, die nur noch Abstürze meldet, ist keine sinnvolle
+# Einstellung für den laufenden Betrieb (die Testsuite setzt sie über
+# LOG_LEVEL trotzdem, deshalb prüft nur die API gegen diese Liste).
+LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+
+def _file_handler() -> logging.Handler | None:
+    """Zweites Ziel neben der Standardausgabe: eine Datei unter LOG_DIR.
+
+    Nur wenn LOG_DIR gesetzt ist (docker-compose hängt dort ein Verzeichnis
+    vom Host ein). Lässt sich nicht hineinschreiben – fehlende Rechte auf dem
+    eingehängten Verzeichnis sind der wahrscheinlichste Fall –, läuft die App
+    weiter und meldet es auf der Standardausgabe. Ein nicht beschreibbares
+    Log-Verzeichnis darf den Dienst nicht aufhalten.
+    """
+    if not config.LOG_DIR:
+        return None
+    try:
+        path = Path(config.LOG_DIR)
+        path.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            path / "app.log", maxBytes=config.LOG_MAX_BYTES,
+            backupCount=config.LOG_BACKUP_COUNT, encoding="utf-8")
+    except OSError as err:
+        print(json.dumps({"level": "WARNING", "logger": "rechnung",
+                          "message": "log directory not writable",
+                          "log_dir": config.LOG_DIR, "error": str(err)}),
+              flush=True)
+        return None
     handler.setFormatter(JsonFormatter())
+    return handler
+
+
+def setup_logging() -> None:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    file_handler = _file_handler()
+    if file_handler:
+        handlers.append(file_handler)
+    for handler in handlers:
+        handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
-    root.handlers = [handler]
+    root.handlers = handlers
     root.setLevel(config.LOG_LEVEL)
     # uvicorns eigener Access-Log doppelt unseren – wir loggen selbst mehr.
     logging.getLogger("uvicorn.access").disabled = True
@@ -66,6 +106,24 @@ def setup_logging() -> None:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers = []
         uvicorn_logger.propagate = True
+
+
+def current_level() -> str:
+    """Stufe, mit der die App gerade läuft – als Name, nicht als Zahl."""
+    return logging.getLevelName(logging.getLogger().level)
+
+
+def set_level(level: str) -> str:
+    """Stufe der laufenden App umstellen. Wirkt sofort, ohne Neustart.
+
+    Gibt die gesetzte Stufe zurück; unbekannte Namen lösen ValueError aus,
+    damit die API mit 400 antworten kann statt still nichts zu tun.
+    """
+    name = (level or "").strip().upper()
+    if name not in LEVELS:
+        raise ValueError(f"Unbekannte Log-Stufe: {level}")
+    logging.getLogger().setLevel(name)
+    return name
 
 
 def current_request_id() -> str:

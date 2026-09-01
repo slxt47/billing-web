@@ -73,13 +73,39 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Image bauen
-        run: docker build -t rechnung-web:ci ./backend
+        run: docker build -t rechnung-app:ci ./backend
 
       - name: Läuft nicht als root
         run: |
-          uid="$(docker run --rm --entrypoint id rechnung-web:ci -u)"
+          uid="$(docker run --rm --entrypoint id rechnung-app:ci -u)"
           echo "Container-UID: $uid"
           test "$uid" != "0"
 
       - name: docker-compose.yml validieren
         run: docker compose -f docker-compose.yml config >/dev/null
+
+      # Das nginx-Image ueberspringt .envsh-Dateien ohne Ausfuehrungsrecht
+      # stillschweigend - dann bliebe ${NGINX_LOG_LEVEL} unersetzt stehen und
+      # beide nginx starten nicht mehr. Genau so ist es beim Umbau passiert.
+      - name: nginx-Hilfsskript ist ausfuehrbar
+        run: test -x nginx/05-log-level.envsh
+
+      - name: nginx-Konfiguration pruefen
+        run: |
+          # Der Proxy braucht ein Zertifikat, sonst scheitert schon der
+          # Syntaxtest. nginx:alpine bringt kein openssl mit, also hier erzeugen.
+          mkdir -p /tmp/certs
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout /tmp/certs/localhost.key -out /tmp/certs/localhost.crt \
+            -subj "/CN=localhost" 2>/dev/null
+          for tpl in nginx/*.conf.template; do
+            name="$(basename "$tpl" .template)"
+            echo "== $name"
+            docker run --rm \
+              -e LOG_LEVEL=INFO \
+              -e NGINX_ENVSUBST_FILTER='^(LOG_LEVEL|NGINX_)' \
+              -v "$PWD/$tpl:/etc/nginx/templates/$name.template:ro" \
+              -v "$PWD/nginx/05-log-level.envsh:/docker-entrypoint.d/05-log-level.envsh:ro" \
+              -v /tmp/certs:/etc/nginx/certs:ro \
+              --entrypoint /docker-entrypoint.sh nginx:alpine nginx -t
+          done

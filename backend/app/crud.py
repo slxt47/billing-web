@@ -638,6 +638,22 @@ def set_logo(db: Session, content: bytes, mime: str) -> None:
     db.commit()
 
 
+# --------------------------- Technische Einstellungen -------------------
+# Schlüssel/Wert-Tabelle app_settings – getrennt von den Firmendaten oben.
+def get_app_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.get(models.AppSetting, key)
+    return row.value if row else default
+
+
+def set_app_setting(db: Session, key: str, value: str) -> None:
+    row = db.get(models.AppSetting, key)
+    if row:
+        row.value = value
+    else:
+        db.add(models.AppSetting(key=key, value=value))
+    db.commit()
+
+
 def seed_users(db: Session) -> None:
     """Beim ersten Start: Admin + die in APP_USERS genannten Benutzer anlegen."""
     if db.query(models.User).count() > 0:

@@ -7,39 +7,47 @@ RECHNUNGS-APP - TECHNICAL DOCUMENTATION
 +---------------------+
 
 ARCHITECTURE:
-┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
-│ Client  │ →  │ Nginx   │ →  │ FastAPI │ →  │ Postgres│    │ MailHog │
-└─────────┘ ←  └─────────┘ ←  └─────────┘ ←  └─────────┘    └─────────┘
-                                    │
-                                    └────────── SMTP ────────→ (or real
-                                                                mail provider
-                                                                in prod)
+┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐  ┌─────────┐  ┌─────────┐
+│ Client │→ │ proxy  │→ │  web   │→ │  app   │→ │ Postgres│  │ MailHog │
+└────────┘← └────────┘← └────────┘← └────────┘← └─────────┘  └─────────┘
+             nginx       nginx       FastAPI         │
+             TLS,        /static     API, session    └── SMTP ──→ (or real
+             by host     from disk   CSRF, PDF                     provider)
                ┌─────────┐
-               │ Backup  │ (pg_dump, daily, → ./backups, read by web
+               │ Backup  │ (pg_dump, daily, → ./backups, read by the app
                └─────────┘  container for admin list/download/restore)
 
-The `web` container serves both the JSON API and the static frontend
-(vanilla JS/HTML/CSS under `backend/app/static`) from the same FastAPI app.
-There is no separate frontend build step or framework.
+Two nginx layers, on purpose and with different jobs. `proxy` terminates TLS
+and routes by hostname (rechnungen.localhost vs mail.localhost). `web` serves
+`/static/*` straight off disk from a read-only bind mount of
+`backend/app/static` and proxies everything else to `app:8000`. `app` is the
+FastAPI process: root, `/login`, `/logout`, `/datenschutz` and the whole API
+stay there, because session, CSRF and the login check live in its middleware.
+
+The frontend is still vanilla JS/HTML/CSS with no build step; splitting it out
+means a change to `app.js` or `styles.css` is live immediately instead of
+after an image rebuild, which is what happened while the files were baked into
+the app image.
 
 The same picture as a diagram, with the backup service's relationship to the
-database and the `web` container made explicit (it writes dumps, `web` only
+database and the `app` container made explicit (it writes dumps, `app` only
 reads them for the admin backup UI):
 
 ```mermaid
 flowchart LR
     Client(["Browser"])
-    Nginx["Nginx<br/>(reverse proxy, TLS)"]
-    Web["FastAPI web<br/>(API + static frontend)"]
+    Proxy["proxy · nginx<br/>(TLS, host routing)"]
+    Web["web · nginx<br/>(/static from disk)"]
+    App["app · FastAPI<br/>(API, session, CSRF, PDF)"]
     DB[("PostgreSQL")]
     Mail["MailHog (dev)<br/>or real SMTP (prod)"]
     Backup["backup service<br/>(pg_dump, daily, ./backups)"]
 
-    Client <--> Nginx <--> Web
-    Web <--> DB
-    Web -- SMTP --> Mail
+    Client <--> Proxy <--> Web <--> App
+    App <--> DB
+    App -- SMTP --> Mail
     Backup -- pg_dump --> DB
-    Backup -. read-only mount .-> Web
+    Backup -. read-only mount .-> App
 ```
 
 TECHNOLOGY STACK:
@@ -48,12 +56,12 @@ TECHNOLOGY STACK:
 +------------+-------------------+-------------------------------------------+
 | Backend    | Python 3.12/FastAPI/SQLAlchemy | Business logic, REST API   |
 | Database   | PostgreSQL 16     | Data persistence                         |
-| Frontend   | Vanilla JS/HTML/CSS | UI, served as static files by FastAPI  |
+| Frontend   | Vanilla JS/HTML/CSS | UI, served off disk by the web nginx  |
 | PDF        | ReportLab + qrcode | Invoice/quote/delivery-note/credit-note PDFs + GiroCode, styled by a PDF template |
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
-| Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 251 backend + 114 frontend tests, static checks, image build |
+| Container  | Docker Compose    | 6 services: app, web, db, mailhog, proxy, backup |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 282 backend + 119 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
@@ -68,6 +76,27 @@ Guided scripts (recommended):
                               existing self-signed cert if certbot is
                               unavailable or no domain is given)
 
+Uninstall: `scripts/uninstall.sh`. Step 1 (containers + network) always runs;
+database volume, backups, logs, certificates, the built app image, `.env` and
+the host service user are each asked for separately. `--all` answers yes to
+everything, `--keep-data` answers no to everything past the containers,
+`--dry-run` only prints (combinable). Without a TTY every question counts as
+no, so an unattended run deletes no data. Deletion is attempted without sudo
+first and only escalates if that fails (after `setup-*.sh` the files belong to
+the service user); a failed step reports and continues instead of aborting the
+rest — under `set -e` the first version ended silently in the middle.
+
+`uninstall.sh` and `prepare-logs.sh` locate themselves via `$0`, like
+`setup-test.sh` and `setup-prod.sh` always have, and re-`exec` themselves under
+bash when started with a different shell (`zsh scripts/uninstall.sh`). Both use
+bash-only syntax (`read -p`, `[[ =~ ]]`, arrays), and the first version used
+`${BASH_SOURCE[0]}`, which is empty outside bash — under zsh the script aborted
+with "BASH_SOURCE[0]: parameter not set" before it could even source
+`lib-common.sh`. Verified on Ubuntu 24.04 (where `/bin/sh` is dash) with bash,
+sh, dash, zsh and the shebang, including a full non-dry `--all` run that also
+removes the service user. Without bash at all the guard exits 1 with a plain
+message.
+
 Manual steps:
 1. Generate a self-signed dev cert:
    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -81,7 +110,10 @@ Manual steps:
    APP_USERS=admin:admin,anna:passwort
    SESSION_SECRET=<random, change in production>
 
-3. Start services:
+3. Create the log directories (one per container, see LOG FILES ON DISK):
+   scripts/prepare-logs.sh
+
+4. Start services:
    docker compose up --build
 
 On startup, `on_startup()` in `main.py` calls `init_db()`, which waits for
@@ -99,7 +131,7 @@ ACCESS POINTS:
 | http://rechnungen.localhost| Main Application  | 80   | via nginx            |
 | https://rechnungen.localhost| Main Application | 443  | self-signed by default, or Let's Encrypt via setup-prod.sh |
 | http://mail.localhost      | MailHog           | 80   | via nginx, dev email testing |
-| http://localhost:8000      | Main Application  | 8000 | direct, bypasses proxy |
+| http://localhost:8000      | Main Application  | 8000 | the web nginx, bypasses proxy only |
 | http://localhost:8025      | MailHog           | 8025 | direct, bypasses proxy |
 +----------------------------+-------------------+------+---------------------+
 
@@ -134,6 +166,8 @@ DATABASE SCHEMA (SQLAlchemy models in backend/app/models.py):
 | audit_log        | id, timestamp, username, action, target_type, target_id, |
 |                  | detail                                                    |
 | presence         | id, doc_type, doc_id, username, last_seen                 |
+| app_settings     | key (PK), value – operational settings, currently only   |
+|                  | "log_level"; kept apart from `settings` (company data)   |
 |                  | (unique per doc_type+doc_id+username; short-lived)        |
 +------------------+---------------------------------------------------------+
 
@@ -316,6 +350,12 @@ and coming back to the foreground fetches at once (`visibilitychange`). Next
 to the refresh button stands when the numbers last arrived, at which rate, and
 a failed fetch with its status – otherwise a stalled poll would look like
 fresh numbers.
+The view also carries the log-level selector (`#log-level`, see LOGGING &
+ERROR HANDLING). It is fetched once when the view opens and not on the poll
+tick: the level only changes when someone changes it here, and a fetch per
+second would overwrite the user's own selection mid-open. A rejected change
+re-reads the real level so the dropdown never shows something the server
+isn't actually running.
 Alerts (many 5xx, many failed logins, stale or missing backup) go by e-mail to
 the company address from the settings, at most once per `ALERT_COOLDOWN` per
 kind; the check runs from the middleware at most once a minute and only when
@@ -623,8 +663,45 @@ and unhandled exceptions) are normalized to
 `{"detail": ..., "request_id": ...}`; validation errors are flattened from
 FastAPI's nested list into a single readable string. Unhandled exceptions log
 the traceback and return a generic 500 without leaking internals. `/static`,
-`/health` and `/favicon.ico` are excluded from the access log. Level via
-`LOG_LEVEL`.
+`/health` and `/favicon.ico` are excluded from the access log.
+
+Two sinks: always stdout, and – when `LOG_DIR` is set – a
+`RotatingFileHandler` on `$LOG_DIR/app.log` with the same JSON formatter
+(`LOG_MAX_BYTES`, default 10 MB, `LOG_BACKUP_COUNT`, default 5). docker-compose
+sets `LOG_DIR=/logs` and bind-mounts `./logs/app` there. If the directory
+cannot be created or opened – missing permissions on the mount is the likely
+case – `_file_handler()` prints one JSON warning to stdout and returns None:
+an unwritable log directory must not stop the service. With `LOG_DIR` empty
+there is no file handler at all, which is how the test suite runs.
+
+Level: `LOG_LEVEL` is only the level *at boot*. `logging_setup.set_level()`
+changes the running root logger, and `LEVELS` (`DEBUG`, `INFO`, `WARNING`,
+`ERROR`) is what the API accepts – `CRITICAL` is deliberately not offered as a
+choice, though it still works as a boot value (conftest.py uses it). The
+chosen level is stored in `app_settings["log_level"]` and re-applied by
+`on_startup()`, so it survives a restart; a stored value that no longer parses
+is logged and ignored rather than blocking the start. `GET/POST
+/api/admin/log-level` are admin-only and every change is written to the audit
+log.
+
+The other containers get their level at start time, not at runtime: both nginx
+containers read `LOG_LEVEL` and translate it in
+`nginx/05-log-level.envsh`, which the official image *sources* (hence the
+`.envsh` suffix – and it must be executable, or the entrypoint silently skips
+it) before `20-envsubst-on-templates.sh` fills `${NGINX_LOG_LEVEL}` into
+`nginx/*.conf.template`. Postgres uses `PG_LOG_LEVEL` for `log_min_messages`.
+
+LOG FILES ON DISK:
+Every container writes into its own directory under `./logs/`, alongside (not
+instead of) the Docker journal: `app/app.log` (Python), `web/` and `proxy/`
+(nginx access.log + error.log), `db/postgresql-YYYY-MM-DD.log` (via
+`logging_collector=on`), `mailhog/mailhog.log` and `backup/backup.log` (both
+piped through `tee`, since neither can write a log file itself).
+`scripts/prepare-logs.sh` creates the six directories with mode 0777, because
+the containers run as different users – app 10001, Postgres 70, MailHog 1000,
+nginx root – and no single owner fits all of them; both setup scripts call it.
+Left to Docker, the directories would be created as root and only nginx could
+write.
 
 API PAGINATION:
 List endpoints (`/api/invoices`, `/api/quotes`, `/api/delivery-notes`,
@@ -688,10 +765,20 @@ of where in the DOM it now lives.
 At `window.innerWidth <= 600` (phone-sized, `MOBILE_NAV_BREAKPOINT`),
 `syncMobileNav()` goes a step further: only the button for the *current*
 view stays in `.nav-primary`, every other core button is reparented into
-`#nav-more-menu` too (inserted right before the first admin button, so core
-items list above admin ones there), and the toggle becomes visible for every
+`#nav-more-menu` too, and the toggle becomes visible for every
 user, not just admins – on a phone everyone needs it to reach the other
-views. `syncMobileNav()` re-sorts the buttons on three occasions: once at
+views. The five admin buttons get the mirror-image treatment: they normally
+live only in `#nav-more-menu`, but on a phone the *active* one is moved into
+`.nav-primary` as well – otherwise, sitting in an admin view on a phone, the
+bar would show no active button at all and you could not tell where you are.
+Leaving that view moves it straight back into `#nav-more-menu`.
+`sortMoreMenu()` then walks `[...PRIMARY_NAV_IDS, ...MORE_NAV_IDS]` and
+`appendChild`s every one currently in the menu, so the menu always reads
+core-items-then-admin-items in their canonical order regardless of the order
+things were evicted or returned in. This replaced an earlier
+`insertBefore(btn, #nav-settings)` scheme, which broke once `#nav-settings`
+itself could be the button that moved out to the bar.
+`syncMobileNav()` re-sorts the buttons on three occasions: once at
 load, at the end of every `show(view)` call (the active button changes, so
 the reparenting has to follow), and on a debounced `resize` listener (150 ms,
 so a drag-resize doesn't refire it dozens of times). Widening back past the
@@ -708,10 +795,8 @@ breakpoint pass, `syncMobileNav()` runs `trimPrimaryNav(active)`: while
 that is *not* the active one and reparents it into `#nav-more-menu`, until
 the bar fits (a guard counter bounds the loop at `PRIMARY_NAV_IDS.length`).
 The burger toggle is forced visible as soon as anything has been moved,
-otherwise those views would be unreachable. `sortMoreMenu()` then re-inserts
-the moved core buttons in `PRIMARY_NAV_IDS` order before the first admin
-button, so the menu keeps its familiar order rather than the order things
-happened to be evicted in. If (and only if) something was moved, the active
+otherwise those views would be unreachable. `sortMoreMenu()` then restores
+the menu's canonical order (see above). If (and only if) something was moved, the active
 button is finally moved to the front of `.nav-primary` – on a screen where
 everything fits, the natural order is left alone, so buttons don't shuffle
 around under the user on every view change.
@@ -735,10 +820,20 @@ button ignores `justify-content`), and `.actions` widens its gap to 0.5rem.
 Font sizes are untouched – the buttons only get taller and stand further
 apart. Phone-only: on a pointer device the compact rows stay as they were.
 
-`.nav-user` is `flex: 0 1 auto; min-width: 0` with `overflow: hidden` and
-`text-overflow: ellipsis`. It used to be `flex: 0 0 auto`, so a long user
-name could not shrink, pushed `.nav-primary` out of the viewport and made
-the whole page scroll sideways (`body` has no `overflow-x: hidden`).
+LOG OUT: `#logout` (`<a href="/logout">`) is not a standalone bar item any
+more. It sits inside `#nav-user-menu`, a `.popover` that opens from
+`#nav-user-toggle` – the username itself, now a `<button class="nav-user">`.
+Same open/close plumbing as the burger menu (`toggleNavUserMenu()`, a
+document `click` handler for click-outside, `Escape` to close). The old
+standalone button was `flex: 0 0 auto` with a border and, on a phone,
+`min-height: 44px`; it never yielded, so on a narrow viewport the squeeze
+landed entirely on `.nav-primary` (`min-width: 0; overflow-x: auto`) and the
+one button that tells you where you are got clipped ("Lieferschein" for
+"Lieferscheine"). `.nav-user` keeps `min-width: 0` + `overflow: hidden` +
+`text-overflow: ellipsis` and its anchor `.nav-user-anchor` is `flex: 0 1
+auto`, so a long user name still shrinks to an ellipsis rather than pushing
+the bar out of the viewport (`body` has no `overflow-x: hidden`). The menu
+is pinned `right: 0` so it opens inward from the right edge.
 
 CSP AND INLINE STYLES: `style-src 'self'` (security.py) has no
 `'unsafe-inline'`, so a `style="..."` attribute that arrives through parsed
@@ -798,12 +893,13 @@ SQLite: `crud._lock_doc_numbers()` only issues `pg_advisory_xact_lock` on
 PostgreSQL, and `database._migrate()` skips the `ADD COLUMN IF NOT EXISTS`
 statements (on SQLite `create_all()` already produces the current schema).
 
-`backend/tests/frontend/` holds 102 frontend tests that load the real
+`backend/tests/frontend/` holds 119 frontend tests that load the real
 `index.html` and `app.js` into a jsdom window with a stubbed API and exercise
 the customer picker, the draft cache, the list filters, the sample-file and
 mass-export downloads (CSV/JSON), the customer/product import, the post-save
 navigation into the invoice overview, the delivery-note list, the report
-builder, the edit lock on quotes and delivery notes, the CSRF header and the
+builder, the responsive nav (burger menu, mobile bar, the log-out popover),
+the edit lock on quotes and delivery notes, the CSRF header and the
 HTML escaping (`npm install && npm test`, needs Node >= 20). A stubbed route
 may be a function of the request options when GET and POST on the same path
 must differ.
