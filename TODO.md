@@ -98,12 +98,13 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
     einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
     und unbehandelte Fehler
-[X] Automatisierte Tests: 251 pytest-Tests in backend/tests/ gegen eine
+[X] Automatisierte Tests: 282 pytest-Tests in backend/tests/ gegen eine
     temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
     Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import und -Export),
     Admin-Endpunkte, Auswertungen (inkl. freiem Report-Builder), Response-Cache,
-    Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 114 Frontend-Tests in backend/tests/frontend/, die die
+    Audit-Log, Log-Stufe, die Shell-Skripte (Trockenlauf von uninstall.sh)
+    und die Sicherheitsschicht. Start mit `python -m pytest` in
+    backend/. Dazu 119 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
     Logo-Upload, Kunden-/Artikelimport und -export, Beispieldateien als
@@ -308,7 +309,61 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 --------------------------------------------------------------------------------
 6. SYSTEM & DEPLOYMENT
 --------------------------------------------------------------------------------
-[X] Docker-Compose-Stack (web, db, mailhog, proxy, backup – 5 Container)
+[X] Docker-Compose-Stack (app, web, db, mailhog, proxy, backup – 6 Container).
+    Die Anwendung steckt seit dem Umbau in einem eigenen Container
+    `rechnung_app` (uvicorn/FastAPI) statt wie vorher im Web-Container.
+    `rechnung_web` ist jetzt ein nginx, der /static direkt von der Platte
+    liefert (Bind-Mount auf backend/app/static, nginx/web.conf.template) und
+    alles Übrige an `app:8000` weiterreicht – Wurzel, /login, /logout,
+    /datenschutz und die gesamte API bleiben bei der App, dort hängen ja
+    Sitzung, CSRF und Anmeldeprüfung. Der Weg ist damit proxy -> web -> app.
+    Zwei Dinge fallen dabei ab: eine Änderung an app.js oder styles.css ist
+    sofort da statt erst nach einem Neubau des Images, und die
+    Sicherheits-Header der Statik setzt nginx selbst (dieselbe CSP wie
+    security.py, weil dessen Middleware für diese Dateien nicht mehr läuft).
+[X] Deinstallations-Skript (scripts/uninstall.sh). Schritt 1 – Container und
+    Netz weg – läuft immer; Datenbank-Volume, Backups, Logs, Zertifikate,
+    das gebaute App-Image, die .env und der Host-Benutzer werden einzeln
+    abgefragt. Schalter: --all (ohne Rückfrage), --keep-data (nur Container
+    und Images), --dry-run (nur anzeigen, kombinierbar), --help. Ohne
+    Terminal wird jede Rückfrage verneint, ein unbeaufsichtigter Lauf
+    löscht also keine Daten. Gelöscht wird erst ohne und nur bei Bedarf mit
+    sudo (nach setup-*.sh gehören die Dateien dem Dienstbenutzer), und ein
+    fehlgeschlagener Schritt bricht den Rest nicht ab – beides waren beim
+    ersten Durchlauf echte Fehler: unter `set -e` endete das Skript still
+    mitten in Schritt 3. Dritter Fehler aus dem Praxiseinsatz: mit
+    `zsh scripts/uninstall.sh` gestartet gibt es BASH_SOURCE nicht, das Skript
+    brach mit „BASH_SOURCE[0]: parameter not set" ab und fand lib-common.sh
+    nicht. Beide neuen Skripte finden sich jetzt über $0 – wie setup-test.sh
+    und setup-prod.sh seit jeher – und starten sich mit bash neu, wenn sie mit
+    einer anderen Shell aufgerufen werden. Auch die Hilfe schneidet den
+    Dateikopf über awk statt über feste Zeilennummern aus.
+[X] Logs liegen auf der Platte, je Container ein eigenes Verzeichnis unter
+    ./logs/ (app, web, proxy, db, mailhog, backup) – zusätzlich zum
+    Docker-Journal, nicht statt dessen. Die App schreibt ihre JSON-Zeilen
+    über einen RotatingFileHandler nach ./logs/app/app.log (LOG_DIR,
+    10 MB, 5 Generationen; logging_setup._file_handler). Die beiden nginx
+    legen access.log und error.log ab, Postgres schreibt über
+    logging_collector, MailHog und das Backup-Skript über `tee`.
+    scripts/prepare-logs.sh legt die Verzeichnisse mit 0777 an – die
+    Container laufen unter verschiedenen Benutzern (App 10001, Postgres 70,
+    MailHog 1000, nginx root), ein einzelner chown passt für keinen davon.
+    Beide Setup-Skripte rufen es auf. Ein nicht beschreibbares Verzeichnis
+    hält die App nicht auf: sie meldet es und loggt weiter auf die
+    Standardausgabe.
+[X] Log-Stufe in der Weboberfläche umschaltbar (Monitoring -> „Log-Stufe",
+    nur Admins): DEBUG/INFO/WARNING/ERROR wirken sofort auf den laufenden
+    Prozess (logging_setup.set_level) und liegen in der Tabelle app_settings,
+    überstehen also einen Neustart – on_startup liest sie wieder ein und
+    lässt sich von einem unbrauchbaren Wert nicht aufhalten. Die Tabelle ist
+    bewusst getrennt von `settings`: dort stehen die Firmendaten, die auf
+    jedem PDF landen. Endpunkte GET/POST /api/admin/log-level, jede
+    Umstellung landet im Audit-Log. CRITICAL ist als Auswahl nicht dabei –
+    eine App, die nur noch Abstürze meldet, ist keine Betriebseinstellung
+    (als Startwert über LOG_LEVEL geht es weiter, die Testsuite nutzt das).
+    Die übrigen Container bekommen ihre Stufe beim Start aus LOG_LEVEL bzw.
+    PG_LOG_LEVEL in der .env; nginx rechnet sie sich in
+    nginx/05-log-level.envsh selbst um.
 [X] Tägliche automatische Backups (pg_dump, gzip, 14 Tage Aufbewahrung)
 [X] Backup-Verwaltung für Admins (auflisten, herunterladen, wiederherstellen
     mit doppelter Bestätigung)
@@ -350,7 +405,7 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Daneben steht, wann die Zahlen zuletzt kamen, in welchem Takt sie
     nachkommen und ob ein Abruf fehlgeschlagen ist.
 [X] Horizontale Skalierung / Lastverteilung (bewusst ein einzelner
-    `web`-Container; die Login-Sperre lebt im Prozessspeicher und würde
+    `app`-Container; die Login-Sperre lebt im Prozessspeicher und würde
     mehrere Repliken nicht überstehen)
 [X] Response-Cache (cache.py, response_cache_middleware): hält die Antwort von
     /api/stats und allem unter /api/reports/ (UStVA, Erlöse, freier
@@ -364,7 +419,7 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     /lock ist davon ausgenommen, sonst würde ihr 90-Sekunden-Heartbeat den
     Cache dauernd neu leeren). Schaltbar über CACHE_ENABLED, TTL über
     CACHE_TTL_SECONDS. Zustand liegt wie Login-Sperre, Rate-Limit und
-    Monitoring im Prozessspeicher des einen `web`-Containers.
+    Monitoring im Prozessspeicher des einen `app`-Containers.
 
 
 --------------------------------------------------------------------------------
@@ -500,6 +555,26 @@ Sonst ist hier nichts geparkt.
     hineinpassen. In jsdom gibt es kein Layout (scrollWidth und clientWidth
     sind 0) und kein scrollIntoView; die drei neuen Frontend-Tests geben die
     Breiten deshalb selbst vor (fakeNavWidth).
+    Das galt zunächst nur für die neun Kernpunkte: stand man auf dem Handy in
+    einem Verwaltungspunkt (Firma, Benutzer, Audit-Log, Backup, Monitoring),
+    zeigte die Leiste gar keinen aktiven Punkt, weil syncMobileNav nur die
+    Kernpunkte in die Leiste holte. Jetzt rückt auch ein aktiver
+    Verwaltungspunkt auf dem Handy sichtbar in die Leiste und wandert beim
+    Wechsel zurück ins Burger-Menü; die feste Menü-Reihenfolge (erst
+    Kernpunkte, dann Verwaltungspunkte) stellt sortMoreMenu über die Liste
+    MORE_NAV_IDS wieder her, ohne den früheren festen Einfügeanker
+    #nav-settings, der ja selbst in die Leiste wandern kann.
+[X] „Abmelden“ steckt hinter dem Benutzernamen (index.html: #nav-user-toggle/
+    #nav-user-menu, app.js: toggleNavUserMenu, styles.css: .nav-user und
+    .nav-user-menu). Der Benutzername ist jetzt ein Knopf; ein Klick klappt
+    ein kleines Menü mit dem Abmelden-Link auf – dasselbe Auf-/Zu-/Escape-/
+    Klick-daneben-Muster wie beim Burger-Menü. Vorher stand „Abmelden“ als
+    fester, nicht schrumpfbarer Knopf (flex: 0 0 auto, Rand, min-height 44px)
+    in derselben Zeile wie der aktive Menüpunkt. Auf einem echten Handy war
+    .nav-primary das einzige Element, das noch nachgeben konnte (min-width: 0,
+    overflow-x: auto) – also wurde ausgerechnet der aktive Menüpunkt
+    abgeschnitten („Lieferschein“ statt „Lieferscheine“), während „Abmelden“
+    seinen Platz behielt. Das war die Ursache im gemeldeten Bild.
 [X] Durchgang über alle Knöpfe der Oberfläche (74 Stück in index.html, dazu
     die in app.js erzeugten Tabellenzeilen). Ergebnis vorweg: kein toter
     Knopf, kein Selektor in app.js, der ins Leere zeigt, keine doppelte id,
@@ -538,6 +613,48 @@ Aktuell nichts Neues.
 --------------------------------------------------------------------------------
 12. CHANGELOG
 --------------------------------------------------------------------------------
+2026-09-01, sechzehnter Durchgang
+  * Die Anwendung steckt jetzt in einem eigenen Container `rechnung_app`;
+    `rechnung_web` ist ein nginx, der /static von der Platte liefert und den
+    Rest an die App weiterreicht (Abschnitt 6). Der Weg ist proxy -> web ->
+    app. Durchgetestet mit laufendem Stack: Anmeldung, CSRF-geschützte
+    Schreibzugriffe, PDF-Download, Logo-Upload, HTTPS und der Weg über
+    rechnungen.localhost. Zwei echte Fehler dabei gefunden und behoben – das
+    nginx-Image ignoriert .envsh-Dateien ohne Ausführungsrecht, und eine
+    Statik-Änderung ist jetzt ohne Neubau des Images sofort sichtbar.
+  * scripts/uninstall.sh: gestufte Deinstallation mit Rückfrage je Schritt,
+    dazu --all, --keep-data, --dry-run (Abschnitt 6). Beim ersten echten
+    Durchlauf zwei Fehler gefunden: sudo ohne Terminal ließ das Skript unter
+    `set -e` still mitten in Schritt 3 enden, und sudo war zum Löschen
+    meistens gar nicht nötig. Beides behoben.
+  * Logs liegen auf der Platte, je Container ein eigenes Verzeichnis unter
+    ./logs/ (Abschnitt 6). scripts/prepare-logs.sh legt sie an, beide
+    Setup-Skripte rufen es auf.
+  * Log-Stufe im Monitoring umschaltbar (DEBUG/INFO/WARNING/ERROR), wirkt
+    sofort und übersteht einen Neustart; neue Tabelle app_settings, neue
+    Endpunkte GET/POST /api/admin/log-level (Abschnitt 6).
+  * scripts/uninstall.sh und scripts/prepare-logs.sh laufen jetzt auch,
+    wenn man sie mit einer fremden Shell startet (`zsh scripts/…`):
+    beide finden sich über $0 statt über BASH_SOURCE und starten sich
+    nötigenfalls mit bash neu (Abschnitt 6). Aus dem Praxiseinsatz
+    gemeldet, mit Regressionstests für sh und zsh abgesichert.
+  * Teststand: 282 Backend- und 119 Frontend-Tests (31 bzw. 3 neue:
+    test_logging.py, test_scripts.py, Log-Stufe in der Oberfläche).
+
+2026-09-01, fünfzehnter Durchgang
+  * Gemeldetes Bild (zwei iPhone-Simulatoren): auf dem Handy wurde der aktive
+    Menüpunkt abgeschnitten („Lieferschein“ statt „Lieferscheine“). Ursache:
+    der feste, nicht schrumpfbare „Abmelden“-Knopf stand in derselben Zeile,
+    nur .nav-primary konnte noch nachgeben. „Abmelden“ steckt jetzt hinter dem
+    Benutzernamen – ein Klick klappt ein kleines Menü auf, gleiches Muster wie
+    das Burger-Menü (Abschnitt 10).
+  * Auch ein aktiver Verwaltungspunkt (Firma, Benutzer, Audit-Log, Backup,
+    Monitoring) rückt auf dem Handy sichtbar in die Leiste – vorher zeigte die
+    Leiste dort gar keinen aktiven Punkt (Abschnitt 10). sortMoreMenu stellt
+    die feste Reihenfolge ohne den bisherigen Anker #nav-settings her.
+  * Teststand: 251 Backend- und 116 Frontend-Tests (zwei neue: Benutzer-Menü,
+    aktiver Verwaltungspunkt auf dem Handy).
+
 2026-09-01, vierzehnter Durchgang
   * Der Menüpunkt, in dem man gerade steht, ist jetzt immer sichtbar: reicht
     die Breite nicht, wandern die hinteren Knöpfe einzeln ins Burger-Menü und

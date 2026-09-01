@@ -39,12 +39,15 @@ Frontend, ein `docker compose up` genügt.
 * [Tests](#tests)
 * [API-Überblick](#api-überblick)
 * [Stoppen](#stoppen)
+* [Deinstallieren](#deinstallieren)
 
 ## Architektur
 
-Fünf Container, von Docker Compose zusammengehalten. Der `web`-Container
-liefert die JSON-API **und** die Oberfläche aus derselben FastAPI-App aus –
-es gibt keinen getrennten Frontend-Build.
+Sechs Container, von Docker Compose zusammengehalten. Die Anwendung selbst
+steckt in `rechnung_app`; `rechnung_web` ist ein nginx davor, der die
+Oberfläche (HTML, CSS, JavaScript) direkt von der Platte liefert und alles
+andere an die App weiterreicht. Einen getrennten Frontend-Build gibt es
+weiterhin nicht.
 
 ```
         +-----------+
@@ -52,12 +55,16 @@ es gibt keinen getrennten Frontend-Build.
         +-----+-----+
               |  HTTP / HTTPS
         +-----v----------------+
-        |  proxy (nginx)       |   Port 80 und 443, TLS
-        +-----+----------------+
+        |  proxy (nginx)       |   Port 80 und 443, TLS,
+        +-----+----------------+   Weiche nach Hostname
               |
         +-----v----------------+
-        |  web (FastAPI)       |   JSON-API und Oberfläche in einer App,
-        +--+----------------+--+   läuft als Benutzer "rechnung", nicht root
+        |  web (nginx)         |   /static direkt von der Platte,
+        +-----+----------------+   alles Uebrige weiter an die App
+              |
+        +-----v----------------+
+        |  app (FastAPI)       |   JSON-API, Anmeldung, CSRF, PDF,
+        +--+----------------+--+   laeuft als Benutzer "rechnung", nicht root
            |                |
     +------v------+   +-----v------------+
     |  db         |   |  mailhog (SMTP)  |   in Produktion: echter Anbieter
@@ -68,6 +75,11 @@ es gibt keinen getrennten Frontend-Build.
     |  backup     |   täglich -> ./backups, 14 Tage Aufbewahrung
     +-------------+
 ```
+
+Warum die Trennung: eine Änderung an `app.js` oder `styles.css` ist damit
+sofort da und braucht keinen Neubau des App-Images mehr. Anmeldung, Sitzung
+und CSRF bleiben bei der App – die Wurzel, `/login`, `/logout`,
+`/datenschutz` und die gesamte API laufen weiterhin dort.
 
 Der Status einer Rechnung wandert so:
 
@@ -277,6 +289,32 @@ Lieferscheine kennen *offen / abgeschlossen / storniert*, Gutschriften
   kamen und in welchem Takt sie nachkommen. Dieselben Zahlen liefert
   `GET /api/admin/metrics` als JSON und `/api/admin/metrics.prom` im
   Prometheus-Textformat. Die Zähler leben im Prozess und starten mit ihm neu.
+- **Log-Stufe umschaltbar (nur Admin)** – im Reiter „Monitoring" unter
+  „Log-Stufe": DEBUG, INFO (Vorgabe), WARNING oder ERROR. Die Auswahl gilt
+  **sofort** für die laufende App, ohne Neustart, und übersteht einen
+  Neustart – sie liegt in der Datenbank, nicht nur im Speicher. Jede
+  Umstellung landet im Audit-Log. Die übrigen Container (nginx, Postgres,
+  Backup) übernehmen ihre Stufe beim Start aus `LOG_LEVEL` bzw.
+  `PG_LOG_LEVEL` in der `.env`; wer sie mitziehen will, ändert sie dort und
+  startet neu.
+- **Logs auf der Platte** – jeder Container schreibt zusätzlich zum
+  Docker-Journal in ein eigenes Verzeichnis unter `./logs/`:
+
+  ```
+  logs/
+    app/     app.log                     JSON, eine Zeile je Ereignis,
+                                         rotiert bei 10 MB (5 Generationen)
+    web/     access.log, error.log       nginx vor der App
+    proxy/   access.log, error.log       nginx ganz aussen
+    db/      postgresql-JJJJ-MM-TT.log   PostgreSQL
+    mailhog/ mailhog.log
+    backup/  backup.log
+  ```
+
+  Angelegt werden die Verzeichnisse von `scripts/prepare-logs.sh` (die
+  Setup-Skripte rufen es auf). Lässt sich nicht hineinschreiben, läuft die
+  App trotzdem weiter und meldet es – ein Logverzeichnis darf den Betrieb
+  nicht aufhalten.
 - **Alarm-Mails** – bei gehäuften Serverfehlern, auffällig vielen
   Fehlanmeldungen oder einem zu alten Backup geht eine Mail an die
   Firmen-E-Mail aus den Firmendaten. Schwellen, Beobachtungsfenster und
@@ -340,7 +378,13 @@ Lieferscheine kennen *offen / abgeschlossen / storniert*, Gutschriften
   [Rechnungsübersicht] [Dashboard] [Neue Rechnung] [=]
 
   Handy (bis 600 px) - nur der aktive Punkt bleibt stehen:
-  [Rechnungsübersicht] [=]                            [=] = Burger-Menü
+  [Rechnungsübersicht] [=]  🌙  [👤 admin ▾]          [=] = Burger-Menü
+
+  Klick auf den Namen - hier steckt das Abmelden:
+                            [👤 admin ▾]
+                            +-----------+
+                            | Abmelden  |
+                            +-----------+
 ```
 
 - **Menüleiste, die sich anpasst** – die Leiste bricht nie auf eine zweite
@@ -353,7 +397,13 @@ Lieferscheine kennen *offen / abgeschlossen / storniert*, Gutschriften
 - **Auf dem Handy** (bis 600 px) bleibt nur der aktive Punkt in der Leiste,
   alle anderen stehen im Burger-Menü, das dort jedem Benutzer offensteht und
   nicht nur Admins. Die Verwaltungspunkte (Firma, Benutzer, Audit-Log,
-  Backup, Monitoring) stecken ohnehin immer dort.
+  Backup, Monitoring) stecken sonst immer dort – ist man aber gerade in einem
+  davon, rückt genau dieser auf dem Handy sichtbar in die Leiste, damit man
+  auch dann sieht, wo man steht.
+- **Abmelden** steckt hinter dem Benutzernamen: ein Klick auf „👤 Name“
+  klappt ein kleines Menü mit „Abmelden“ auf. Vorher stand der Knopf fest in
+  der Leiste und drückte auf schmalen Geräten den aktiven Menüpunkt aus dem
+  Bild.
 - **Formulare und Tabellen** – die zweispaltigen Formularfelder brechen unter
   600 px auf eine Spalte um, breite Tabellen bekommen eine eigene
   Querscrollleiste, statt die ganze Seite seitwärts zu schieben. Das
@@ -377,7 +427,7 @@ Lieferscheine kennen *offen / abgeschlossen / storniert*, Gutschriften
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
 | Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
 | Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
-| Tests / CI | pytest (251 Backend-Tests) + jsdom (114 Frontend-Tests), GitHub Actions |
+| Tests / CI | pytest (282 Backend-Tests) + jsdom (119 Frontend-Tests), GitHub Actions |
 
 ## Starten
 
@@ -414,6 +464,7 @@ Voraussetzung: Docker & Docker Compose.
 
 ```bash
 cp .env.example .env
+./scripts/prepare-logs.sh     # ein Log-Verzeichnis je Container anlegen
 docker compose up --build
 ```
 
@@ -425,7 +476,8 @@ Danach im Browser öffnen (über den Reverse-Proxy):
 | **http://mail.localhost** | MailHog (versendete E-Mails) |
 | **https://rechnungen.localhost** | App über HTTPS (selbstsigniert – Browserwarnung bestätigen) |
 
-Die direkten Ports bleiben zusätzlich erreichbar: App auf `http://localhost:8000`,
+Die direkten Ports bleiben zusätzlich erreichbar: App auf `http://localhost:8000`
+(das ist der Web-Container, nur der äußere Proxy wird dabei übergangen),
 MailHog auf `http://localhost:8025`.
 
 > Die meisten Browser lösen `*.localhost` automatisch auf 127.0.0.1 auf. Falls bei
@@ -466,7 +518,7 @@ Let's-Encrypt-Zertifikat. Was danach noch zu prüfen ist:
 | Zertifikat | selbstsigniert, Browserwarnung | Let's Encrypt über certbot |
 | E-Mail | MailHog, keine echte Zustellung | `SMTP_*` auf einen echten Anbieter |
 | Geheimnisse | Beispielwerte aus `.env.example` | eigene Werte; `.env` gehört nicht ins Repo |
-| Skalierung | ein `web`-Container | Login-Sperre und Rate-Limit-Zähler liegen im Prozessspeicher – mehrere Repliken bräuchten einen gemeinsamen Speicher (Redis o. Ä.) |
+| Skalierung | ein `app`-Container | Login-Sperre und Rate-Limit-Zähler liegen im Prozessspeicher – mehrere Repliken bräuchten einen gemeinsamen Speicher (Redis o. Ä.) |
 
 Mitgeliefert sind CSRF-Schutz, Rate-Limit je IP, Security-Header (CSP, HSTS,
 X-Frame-Options), gehärtete Session-Cookies, PBKDF2-Passworthashes,
@@ -586,6 +638,8 @@ Beide Suiten plus Syntax-Prüfungen und ein Image-Build laufen bei jedem Push
 | `GET`   | `/api/admin/metrics` | Kennzahlen als JSON |
 | `GET`   | `/api/admin/metrics.prom` | Kennzahlen im Prometheus-Textformat |
 | `POST`  | `/api/admin/metrics/test-alert` | Probealarm an die Firmen-E-Mail |
+| `GET`   | `/api/admin/log-level` | Laufende Log-Stufe und die wählbaren Stufen |
+| `POST`  | `/api/admin/log-level` | Log-Stufe umschalten (`{"level": "DEBUG"}`) |
 
 ### Lieferscheine
 | Methode | Pfad | Zweck |
@@ -655,3 +709,27 @@ alle 10 Sekunden, solange ein Beleg im Formular offen ist.
 docker compose down          # Container stoppen
 docker compose down -v       # inkl. Datenbank-Volume löschen
 ```
+
+## Deinstallieren
+
+`scripts/uninstall.sh` räumt gestuft auf. Container und Netz gehen immer weg;
+Datenbank-Volume, Backups, Logs, Zertifikate, das gebaute App-Image, die
+`.env` und der Dienstbenutzer werden **einzeln abgefragt**.
+
+```bash
+scripts/uninstall.sh              # gestuft, mit Rückfrage je Schritt
+scripts/uninstall.sh --dry-run    # nur anzeigen, nichts anfassen
+scripts/uninstall.sh --keep-data  # Container und Images weg, Daten bleiben
+scripts/uninstall.sh --all        # alles, ohne Rückfrage
+```
+
+`--dry-run` lässt sich mit den anderen Schaltern kombinieren – erst einmal
+`--dry-run --all` laufen lassen zeigt genau, was ein `--all` täte.
+
+Die Shell ist egal: `bash`, `sh` (auf Ubuntu dash), `zsh` oder der direkte
+Aufruf `./scripts/uninstall.sh` führen zum selben Ergebnis – das Skript startet
+sich nötigenfalls selbst mit bash neu. Nur ganz ohne bash geht es nicht, dann
+sagt es das auch. Dasselbe gilt für `scripts/prepare-logs.sh`. Läuft das
+Skript ohne Terminal (etwa in einer Pipeline), gilt jede Rückfrage als „nein":
+ein unbeaufsichtigter Lauf löscht keine Daten. Die Projektdateien selbst
+bleiben in jedem Fall stehen.
