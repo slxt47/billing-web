@@ -398,6 +398,22 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Neu dazugekommen ist Punkt 6: für abgrenzbare Teilarbeiten eigene Agenten
     starten, mehrere gleichzeitig statt nacheinander, und deren Befunde vor
     dem Weitergeben selbst im Code nachprüfen.
+[X] README.md überarbeitet: der englische Warnblock „Project Status: Not
+    Production Ready“ ganz oben ist weg, ebenso der Hinweis auf den Mistral-
+    Agenten. An seiner Stelle steht ein deutscher Einstieg mit drei
+    ASCII-Skizzen – der Belegfluss (Angebot -> Rechnung -> Lieferschein ->
+    Angebot, dazu die Gutschrift), die fünf Container samt Datenwegen, und
+    die Menüleiste in ihren drei Zuständen (breit, eng, Handy) – plus eine
+    Inhaltsübersicht mit Sprungmarken und ein Statusdiagramm der Rechnung
+    (offen -> teilbezahlt -> bezahlt, Storno und Rückfunktion). Die sachliche
+    Hälfte des alten Warnblocks ist nicht verschwunden, sondern in einen
+    eigenen Abschnitt „Vor dem Produktivbetrieb“ vor den Tests gewandert:
+    eine Tabelle Testbetrieb gegen Echtbetrieb (Zugänge, Zertifikat, E-Mail,
+    Geheimnisse, Skalierung) und der Satz, dass es keinen externen
+    Penetrationstest gab. Die Belegnummern in den Skizzen stimmen mit
+    crud.py überein (AN-/RE-/LS-/GS-), die Kästen sind spaltengenau
+    ausgerichtet. Dazu zwei veraltete Testzahlen richtiggestellt (README-
+    Kopf und die Stack-Tabelle in Technical_documentation.md).
 
 
 --------------------------------------------------------------------------------
@@ -537,6 +553,10 @@ Aktuell nichts Neues.
     Benutzername schob die Menüleiste aus dem Bild, das Vorlagen-Auswahlfenster
     blieb beim Scrollen stehen, und der Backup-Download war der einzige
     englisch beschriftete Knopf – alles fünf behoben (Abschnitt 10).
+  * README.md überarbeitet: Warnblock „Not Production Ready“ und der Hinweis
+    auf den Mistral-Agenten entfernt, dafür ASCII-Skizzen für Belegfluss,
+    Architektur, Rechnungsstatus und Menüleiste, eine Inhaltsübersicht und
+    ein sachlicher Abschnitt „Vor dem Produktivbetrieb“ (Abschnitt 7).
   * Teststand: 251 Backend- und 114 Frontend-Tests.
 
 2026-09-01, dreizehnter Durchgang

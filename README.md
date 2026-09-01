@@ -1,27 +1,89 @@
 # 🧾 Rechnungs-App
 
-Eine Web-Applikation zum Schreiben von Rechnungen, Angeboten und Lieferscheinen –
-komplett in Docker-Containern, mit PostgreSQL-Datenbank, Rechnungsübersicht, PDF-Download,
-E-Mail-Versand und DSGVO-Funktionen.
+Rechnungen, Angebote, Lieferscheine und Gutschriften schreiben – selbst
+gehostet in Docker-Containern, mit PostgreSQL, PDF-Download, E-Mail-Versand,
+Auswertungen und DSGVO-Funktionen. Kein Build-Schritt, kein Framework im
+Frontend, ein `docker compose up` genügt.
 
-## ⚠️ Project Status: Not Production Ready
+```
+    +--------------+  umwandeln   +--------------+  umwandeln   +--------------+
+    |   Angebot    | -----------> |   Rechnung   | -----------> | Lieferschein |
+    | AN-2026-0001 |   (einmal)   | RE-2026-0001 |   (einmal)   | LS-2026-0001 |
+    +--------------+              +------+-------+              +------+-------+
+           ^                             |                             |
+           |                             | Voll- oder Teilgutschrift   |
+           |                             v                             |
+           |                      +--------------+                     |
+           |                      |  Gutschrift  |                     |
+           |                      | GS-2026-0001 |                     |
+           |                      +--------------+                     |
+           |                                                           |
+           +--------------- umwandeln (einmal) ------------------------+
 
-Please note that this web application is experimental and has **not been
-audited by a third party**. It ships with a guided production setup script
-(`scripts/setup-prod.sh`, see below) that generates strong secrets, creates a
-dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
-certificate. CSRF protection, per-IP rate limiting, security response headers
-(CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (251 Backend- + 114 Frontend-Tests) with CI are
-in place.
+    Zu jedem Beleg: PDF mit eigener Vorlage, E-Mail-Versand,
+    Bearbeitungssperre und Live-Anzeige, wer gerade daran sitzt.
+```
 
-Still open before you point this at real customer data: no external
-penetration test, the login-lockout and rate-limit counters live in process
-memory (so a single `web` replica only), and MailHog/self-signed certificates
-remain the defaults until `scripts/setup-prod.sh` replaces them. Review the
-code and `TODO.md` first.
+## Inhalt
 
-🤖 **Development:** The code for this project was written and generated with the assistance of a **Mistral AI Agent**.
+* [Architektur](#architektur)
+* [Funktionen](#funktionen) – [Rechnungen](#rechnungen),
+  [Angebote & Lieferscheine](#angebote--lieferscheine),
+  [Gutschriften](#gutschriften), [Auswertungen](#auswertungen),
+  [Kunden & Artikel](#kunden--artikel), [DSGVO](#dsgvo),
+  [Verwaltung & Betrieb](#verwaltung--betrieb),
+  [Oberfläche](#oberfläche-auf-schmalen-bildschirmen)
+* [Technik](#technik)
+* [Starten](#starten)
+* [Vor dem Produktivbetrieb](#vor-dem-produktivbetrieb)
+* [Tests](#tests)
+* [API-Überblick](#api-überblick)
+* [Stoppen](#stoppen)
+
+## Architektur
+
+Fünf Container, von Docker Compose zusammengehalten. Der `web`-Container
+liefert die JSON-API **und** die Oberfläche aus derselben FastAPI-App aus –
+es gibt keinen getrennten Frontend-Build.
+
+```
+        +-----------+
+        |  Browser  |
+        +-----+-----+
+              |  HTTP / HTTPS
+        +-----v----------------+
+        |  proxy (nginx)       |   Port 80 und 443, TLS
+        +-----+----------------+
+              |
+        +-----v----------------+
+        |  web (FastAPI)       |   JSON-API und Oberfläche in einer App,
+        +--+----------------+--+   läuft als Benutzer "rechnung", nicht root
+           |                |
+    +------v------+   +-----v------------+
+    |  db         |   |  mailhog (SMTP)  |   in Produktion: echter Anbieter
+    | PostgreSQL  |   +------------------+
+    +------^------+
+           |  pg_dump
+    +------+------+
+    |  backup     |   täglich -> ./backups, 14 Tage Aufbewahrung
+    +-------------+
+```
+
+Der Status einer Rechnung wandert so:
+
+```
+                   Teilzahlung          Restzahlung
+        offen  ----------------> teilbezahlt ----------> bezahlt
+          |                           |                     |
+          |                           |                     | Storno
+          +---------------------------+---------------------+
+                                      |
+                                      v
+                                 storniert  --> Rückfunktion --> offen
+```
+
+Lieferscheine kennen *offen / abgeschlossen / storniert*, Gutschriften
+*offen / erstattet / storniert*.
 
 ## Funktionen
 
@@ -269,6 +331,18 @@ code and `TODO.md` first.
 - **Datenbank** – alles wird in PostgreSQL gespeichert.
 
 ### Oberfläche auf schmalen Bildschirmen
+
+```
+  Breiter Bildschirm - alles passt, gewohnte Reihenfolge:
+  [Dashboard] [Neue Rechnung] [Angebote] [Lieferscheine] [Rechnungsübersicht] [=]
+
+  Wird es eng - der aktive Punkt rückt nach vorne, der Rest wandert ins Menü:
+  [Rechnungsübersicht] [Dashboard] [Neue Rechnung] [=]
+
+  Handy (bis 600 px) - nur der aktive Punkt bleibt stehen:
+  [Rechnungsübersicht] [=]                            [=] = Burger-Menü
+```
+
 - **Menüleiste, die sich anpasst** – die Leiste bricht nie auf eine zweite
   Zeile um. Reicht die Breite nicht für alle Punkte, wandern die hinteren
   einzeln in das Burger-Menü (☰), bis der Rest passt. Der Punkt, in dem man
@@ -379,6 +453,26 @@ Versendete E-Mails ansehen: **http://localhost:8025** (MailHog). Für echten
 Versand siehe `scripts/setup-prod.sh` bzw. `SMTP_*`/`MAIL_FROM` in `.env`.
 
 Konfiguration (Ports, DB-Zugangsdaten, Benutzer, SMTP) in der Datei `.env`.
+
+## Vor dem Produktivbetrieb
+
+`scripts/setup-prod.sh` nimmt den größten Teil ab: starke Geheimnisse, ein
+eigener Dienstbenutzer, auf Wunsch echtes SMTP und ein
+Let's-Encrypt-Zertifikat. Was danach noch zu prüfen ist:
+
+| Punkt | Vorgabe im Testbetrieb | Für den Echtbetrieb |
+|-------|------------------------|---------------------|
+| Zugänge | `admin/admin` und drei Testbenutzer | eigene Benutzer mit starken Passwörtern (erzeugt `setup-prod.sh`) |
+| Zertifikat | selbstsigniert, Browserwarnung | Let's Encrypt über certbot |
+| E-Mail | MailHog, keine echte Zustellung | `SMTP_*` auf einen echten Anbieter |
+| Geheimnisse | Beispielwerte aus `.env.example` | eigene Werte; `.env` gehört nicht ins Repo |
+| Skalierung | ein `web`-Container | Login-Sperre und Rate-Limit-Zähler liegen im Prozessspeicher – mehrere Repliken bräuchten einen gemeinsamen Speicher (Redis o. Ä.) |
+
+Mitgeliefert sind CSRF-Schutz, Rate-Limit je IP, Security-Header (CSP, HSTS,
+X-Frame-Options), gehärtete Session-Cookies, PBKDF2-Passworthashes,
+strukturiertes Logging und eine Testsuite mit CI. Einen externen
+Penetrationstest gab es nicht. Die offenen Punkte stehen gesammelt in
+`TODO.md`, Abschnitt 8.
 
 ## Tests
 

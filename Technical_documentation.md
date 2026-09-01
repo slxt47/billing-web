@@ -53,7 +53,7 @@ TECHNOLOGY STACK:
 | Email      | smtplib -> MailHog (dev) or real SMTP (prod) | Sending documents/reminders |
 | Proxy      | Nginx             | Host-based reverse proxy, HTTP + HTTPS   |
 | Container  | Docker Compose    | 5 services: web, db, mailhog, proxy, backup |
-| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 249 backend + 102 frontend tests, static checks, image build |
+| Tests/CI   | pytest + httpx, node:test + jsdom, GitHub Actions | 251 backend + 114 frontend tests, static checks, image build |
 +------------+-------------------+-------------------------------------------+
 
 DEPLOYMENT:
