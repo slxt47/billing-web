@@ -122,6 +122,8 @@ function startApp({ customers = CUSTOMERS, quotes = QUOTES, storage = {},
         totals: { count: 0, item_count: 0, net: 0, tax: 0, gross: 0 },
       },
       "/api/admin/backups": [],
+      "/api/admin/log-level": { level: "INFO", boot_level: "INFO",
+                                levels: ["DEBUG", "INFO", "WARNING", "ERROR"] },
       ...routes,
     };
     if (/^\/api\/presence\/[a-z_]+\/\d+$/.test(path)) {
@@ -1230,6 +1232,71 @@ test("Der Probealarm meldet, wohin er ging", async () => {
                /buero@muster\.example/);
 });
 
+// -------------------------------- Log-Stufe
+test("Die Log-Stufe steht beim Öffnen des Monitorings auf dem laufenden Wert", async () => {
+  const { window } = startApp({
+    routes: { "/api/admin/metrics": METRICS,
+              "/api/admin/log-level": { level: "WARNING", boot_level: "INFO",
+                                        levels: ["DEBUG", "INFO", "WARNING", "ERROR"] } },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  assert.equal(window.document.querySelector("#log-level").value, "WARNING");
+  assert.match(window.document.querySelector("#log-level-boot").textContent,
+               /Stufe beim Start: INFO/);
+});
+
+test("Eine geänderte Log-Stufe wird gemeldet und bestätigt", async () => {
+  const { window, requests } = startApp({
+    routes: { "/api/admin/metrics": METRICS,
+              "/api/admin/log-level": (options) =>
+                (options.method === "POST" ? { level: "DEBUG" }
+                                           : { level: "INFO", boot_level: "INFO",
+                                               levels: ["DEBUG", "INFO", "WARNING", "ERROR"] }) },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  const select = window.document.querySelector("#log-level");
+  select.value = "DEBUG";
+  fire(select, "change");
+  await settle(50);
+
+  const post = requests.find((r) => r.url === "/api/admin/log-level"
+                                 && r.options.method === "POST");
+  assert.ok(post, "die neue Stufe geht per POST an den Server");
+  assert.deepEqual(JSON.parse(post.options.body), { level: "DEBUG" });
+  assert.match(window.document.querySelector("#log-level-msg").textContent, /DEBUG/);
+  assert.equal(window.document.querySelector("#log-level-msg").className, "ok");
+});
+
+test("Lehnt der Server die Stufe ab, springt die Auswahl zurück", async () => {
+  const { window } = startApp({
+    routes: { "/api/admin/metrics": METRICS,
+              "/api/admin/log-level": (options) =>
+                (options.method === "POST"
+                  ? response({ detail: "Unbekannte Log-Stufe" }, 400)
+                  : { level: "INFO", boot_level: "INFO",
+                      levels: ["DEBUG", "INFO", "WARNING", "ERROR"] }) },
+  });
+  await settle();
+  window.document.querySelector("#nav-monitoring").click();
+  await settle(50);
+
+  const select = window.document.querySelector("#log-level");
+  select.value = "ERROR";
+  fire(select, "change");
+  await settle(50);
+
+  assert.match(window.document.querySelector("#log-level-msg").textContent,
+               /Unbekannte Log-Stufe/);
+  assert.equal(window.document.querySelector("#log-level-msg").className, "err");
+  assert.equal(select.value, "INFO", "die Anzeige zeigt wieder die echte Stufe");
+});
+
 test("Das Monitoring aktualisiert sich im gewählten Takt und stoppt beim Verlassen", async () => {
   const { window, requests } = startApp({ routes: { "/api/admin/metrics": METRICS } });
   await settle();
@@ -1327,6 +1394,28 @@ test("Monitoring und Gutschriften stehen nur passenden Benutzern offen", async (
   // Kein Admin -> Monitoring ist ausgeblendet, Gutschriften sind für alle da.
   assert.equal(window.document.querySelector("#nav-credit").hidden, false);
   assert.equal(window.document.querySelector("#nav-reports").hidden, false);
+});
+
+// -------------------------------- Benutzer-Menü (Abmelden)
+test("Abmelden steckt hinter dem Benutzernamen und klappt auf", async () => {
+  const { window } = startApp();
+  await settle();
+
+  const toggle = window.document.querySelector("#nav-user-toggle");
+  const menu = window.document.querySelector("#nav-user-menu");
+  assert.equal(menu.hidden, true);
+  const logout = menu.querySelector("a#logout");
+  assert.ok(logout, "der Abmelden-Link steht im Menü, nicht mehr fest in der Leiste");
+  assert.equal(logout.getAttribute("href"), "/logout");
+
+  toggle.click();
+  assert.equal(menu.hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+
+  // Ein Klick daneben schließt es wieder.
+  window.document.body.click();
+  assert.equal(menu.hidden, true);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
 });
 
 // -------------------------------- Burger-Menü (Verwaltungspunkte)
@@ -1445,6 +1534,29 @@ test("Ein Klick auf einen Menüpunkt macht ihn zum neuen aktiven Handy-Punkt", a
                    ["nav-customers"]);
   // Dashboard ist jetzt selbst im Burger-Menü zu finden.
   assert.ok(window.document.querySelector("#nav-more-menu #nav-dashboard"));
+});
+
+test("Auf dem Handy rückt auch ein aktiver Verwaltungspunkt sichtbar in die Leiste", async () => {
+  const { window } = startApp({ innerWidth: 400 });
+  await settle();
+
+  window.document.querySelector("#nav-more-toggle").click();
+  window.document.querySelector("#nav-settings").click();
+  await settle(20);
+
+  const primary = window.document.querySelector("#nav-primary");
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id),
+                   ["nav-settings"]);
+  assert.ok(primary.querySelector("#nav-settings.active"),
+            "der aktive Verwaltungspunkt steht in der Leiste und ist als aktiv markiert");
+
+  // Zurück zu einem Kernpunkt: der Verwaltungspunkt wandert wieder ins Menü.
+  window.document.querySelector("#nav-more-toggle").click();
+  window.document.querySelector("#nav-dashboard").click();
+  await settle(20);
+  assert.ok(window.document.querySelector("#nav-more-menu #nav-settings"));
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id),
+                   ["nav-dashboard"]);
 });
 
 test("Auf einem breiten Bildschirm bleibt die volle Leiste stehen", async () => {
