@@ -48,7 +48,14 @@ nav button {
   border-radius: 6px;
 }
 nav button.active, nav button:hover { background: var(--primary); color: #fff; }
-.nav-user { color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem; flex: 0 0 auto; }
+/* Der Benutzername darf schrumpfen und notfalls abgeschnitten werden: mit
+   flex: 0 0 auto drückte ein langer Name auf einem schmalen Gerät die
+   Menüleiste aus dem Bild und die ganze Seite scrollte seitwärts. */
+.nav-user {
+  color: var(--muted); font-size: 0.9rem; margin-left: 0.5rem;
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 nav a#logout {
   color: var(--muted); text-decoration: none; font-size: 0.9rem;
   padding: 0.5rem 0.8rem; border-radius: 6px; border: 1px solid var(--border);
@@ -284,6 +291,19 @@ tr.inactive-row { opacity: 0.55; }
   header { padding: 0.75rem 1rem; }
   main { padding: 0 0.5rem; }
   section { padding: 1rem 1.2rem; }
+
+  /* Trefferflächen: mit dem Finger ist alles unter etwa 44 px Kantenlänge
+     nicht zuverlässig zu treffen. Am Schriftgrad ändert sich nichts, die
+     Knöpfe werden nur hoeher und bekommen mehr Luft nebeneinander. */
+  nav button, nav a#logout, .icon-btn,
+  .actions a.link, .actions button, .banner-close {
+    min-height: 44px;
+  }
+  .icon-btn, .banner-close {
+    min-width: 44px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .actions { gap: 0.5rem; row-gap: 0.5rem; }
 }
 
 /* Live-Anzeige: wer hat denselben Beleg gerade offen */

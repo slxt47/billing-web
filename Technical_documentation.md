@@ -700,6 +700,62 @@ because the loop that moves buttons back always walks the same
 `PRIMARY_NAV_IDS` array and `appendChild` on an already-attached node moves
 it rather than cloning it.
 
+The 600 px breakpoint alone is not enough, though: with nine core buttons a
+700 px window still overflows, the bar scrolls sideways, and the button of
+the view you are actually in can sit outside the visible strip. So after the
+breakpoint pass, `syncMobileNav()` runs `trimPrimaryNav(active)`: while
+`navPrimary.scrollWidth > navPrimary.clientWidth`, it takes the last button
+that is *not* the active one and reparents it into `#nav-more-menu`, until
+the bar fits (a guard counter bounds the loop at `PRIMARY_NAV_IDS.length`).
+The burger toggle is forced visible as soon as anything has been moved,
+otherwise those views would be unreachable. `sortMoreMenu()` then re-inserts
+the moved core buttons in `PRIMARY_NAV_IDS` order before the first admin
+button, so the menu keeps its familiar order rather than the order things
+happened to be evicted in. If (and only if) something was moved, the active
+button is finally moved to the front of `.nav-primary` – on a screen where
+everything fits, the natural order is left alone, so buttons don't shuffle
+around under the user on every view change.
+
+Each `syncMobileNav()` starts by putting every core button back into the bar,
+so trimming is recomputed from scratch and cannot ratchet: widening the
+window restores exactly as many buttons as now fit.
+
+jsdom computes no layout – `scrollWidth` and `clientWidth` are both 0 there,
+so `trimPrimaryNav()` is a no-op under test unless the test defines those
+properties itself (`fakeNavWidth()` in `app.test.mjs` does exactly that:
+100 px per button, a configurable number of them visible). The same applies
+to `scrollIntoView`, which jsdom does not implement at all – hence the
+reparenting/reordering approach here rather than a scroll call.
+
+TOUCH TARGETS: inside the `@media (max-width: 600px)` block, `nav button`,
+`nav a#logout`, `.icon-btn`, `.actions a.link`, `.actions button` and
+`.banner-close` get `min-height: 44px` (the two icon buttons and the banner
+close also `min-width: 44px` plus `inline-flex` centring, since a plain
+button ignores `justify-content`), and `.actions` widens its gap to 0.5rem.
+Font sizes are untouched – the buttons only get taller and stand further
+apart. Phone-only: on a pointer device the compact rows stay as they were.
+
+`.nav-user` is `flex: 0 1 auto; min-width: 0` with `overflow: hidden` and
+`text-overflow: ellipsis`. It used to be `flex: 0 0 auto`, so a long user
+name could not shrink, pushed `.nav-primary` out of the viewport and made
+the whole page scroll sideways (`body` has no `overflow-x: hidden`).
+
+CSP AND INLINE STYLES: `style-src 'self'` (security.py) has no
+`'unsafe-inline'`, so a `style="..."` attribute that arrives through parsed
+markup is dropped by the browser. Anything colour-like therefore has to go
+through the CSSOM after the node exists. Two places do this: the dashboard
+bars (`bar.style.height`) and the PDF template list, where each `.swatch`
+carries the colour as `data-color` in the `innerHTML` and gets
+`sw.style.background = sw.dataset.color` right after – before the fix the
+template list showed two empty boxes instead of the accent and header
+colours.
+
+The PDF template chooser (`#pdf-template-menu`, `.popover.floating`) is
+`position: fixed` and positioned once from the row's
+`getBoundingClientRect()`. A capturing `scroll` listener closes it, because
+scrolling the page or a `.table-scroll` container moves the row out from
+under a menu that stays where it is.
+
 MOBILE LAYOUT:
 The four line-item tables (invoice/quote/delivery-note/credit-note forms)
 were the one thing on the page not wrapped in `.table-scroll` – on a phone

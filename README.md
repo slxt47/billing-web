@@ -268,6 +268,27 @@ code and `TODO.md` first.
   optional echtes Let's-Encrypt-Zertifikat über `scripts/setup-prod.sh`).
 - **Datenbank** – alles wird in PostgreSQL gespeichert.
 
+### Oberfläche auf schmalen Bildschirmen
+- **Menüleiste, die sich anpasst** – die Leiste bricht nie auf eine zweite
+  Zeile um. Reicht die Breite nicht für alle Punkte, wandern die hinteren
+  einzeln in das Burger-Menü (☰), bis der Rest passt. Der Punkt, in dem man
+  gerade steht, bleibt dabei immer stehen und rückt an die erste Stelle – wer
+  im Dashboard ist, sieht „Dashboard“ vorne, wer in den Rechnungen ist, sieht
+  „Rechnungen“. Passt alles auf den Bildschirm, bleibt die gewohnte
+  Reihenfolge unangetastet.
+- **Auf dem Handy** (bis 600 px) bleibt nur der aktive Punkt in der Leiste,
+  alle anderen stehen im Burger-Menü, das dort jedem Benutzer offensteht und
+  nicht nur Admins. Die Verwaltungspunkte (Firma, Benutzer, Audit-Log,
+  Backup, Monitoring) stecken ohnehin immer dort.
+- **Formulare und Tabellen** – die zweispaltigen Formularfelder brechen unter
+  600 px auf eine Spalte um, breite Tabellen bekommen eine eigene
+  Querscrollleiste, statt die ganze Seite seitwärts zu schieben. Das
+  Dashboard-Diagramm zeigt auf dem Handy die letzten drei statt aller sechs
+  Monate.
+- **Fingerfreundliche Knöpfe** – unter 600 px sind alle Knöpfe mindestens
+  44 px hoch (die Symbolknöpfe auch 44 px breit) und stehen etwas weiter
+  auseinander. Die Schriftgrößen bleiben dabei unverändert.
+
 ## Technik
 
 | Komponente | Technologie |
@@ -282,7 +303,7 @@ code and `TODO.md` first.
 | Backup     | postgres `pg_dump` (täglich, in `./backups`, 14 Tage Aufbewahrung) |
 | Betrieb    | Docker Compose (5 Container: `web` + `db` + `mailhog` + `proxy` + `backup`), `web` läuft als Benutzer `rechnung` |
 | Sicherheit | CSRF-Token je Sitzung, Rate-Limit je IP, CSP/HSTS/X-Frame-Options, PBKDF2 |
-| Tests / CI | pytest (249 Backend-Tests) + jsdom (102 Frontend-Tests), GitHub Actions |
+| Tests / CI | pytest (251 Backend-Tests) + jsdom (114 Frontend-Tests), GitHub Actions |
 
 ## Starten
 

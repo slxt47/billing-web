@@ -171,12 +171,45 @@ document.addEventListener("keydown", (e) => {
 
 // Auf dem Handy bleibt nur der aktive Menüpunkt in der Leiste, alle anderen
 // Kernpunkte wandern zusätzlich zu den Verwaltungspunkten ins Burger-Menü
-// (TODO.md Abschnitt 11: "einen Hauptpunkt, alles andere im Burger-Menü").
+// (TODO.md, Abschnitt "OBERFLÄCHE / RESPONSIVE DESIGN").
 // Auf einem breiten Bildschirm bleiben sie wie gehabt in der Leiste.
 const MOBILE_NAV_BREAKPOINT = 600;
 const navPrimary = $("#nav-primary");
 const PRIMARY_NAV_IDS = [...navPrimary.querySelectorAll("button")].map((b) => b.id);
 const navMoreAnchor = $("#nav-settings"); // erster Verwaltungspunkt: Einfügepunkt davor
+
+/** Die ausgelagerten Kernpunkte im Burger-Menü in ihre gewohnte Reihenfolge
+ *  bringen – nicht in die, in der sie zufällig ausgelagert wurden. Die
+ *  Verwaltungspunkte ab #nav-settings bleiben dabei unberührt. */
+function sortMoreMenu() {
+  for (const id of PRIMARY_NAV_IDS) {
+    const btn = $(`#${id}`);
+    if (btn && btn.parentElement === navMoreMenu) navMoreMenu.insertBefore(btn, navMoreAnchor);
+  }
+}
+
+/** Reicht die Breite nicht für alle Punkte, wandern die hinteren einzeln ins
+ *  Burger-Menü, bis die Leiste wieder passt. Der aktive Punkt bleibt immer
+ *  stehen – man soll sehen, wo man ist, ohne die Leiste seitwärts zu
+ *  schieben. Rückgabe: ob etwas ausgelagert wurde, die Leiste also eng ist.
+ *
+ *  jsdom rechnet kein Layout, dort sind scrollWidth und clientWidth beide 0,
+ *  die Schleife läuft also gar nicht erst an. Auf dem Handy steht ohnehin nur
+ *  der aktive Punkt in der Leiste, dann gibt es nichts mehr auszulagern. */
+function trimPrimaryNav(active) {
+  let moved = false;
+  for (let guard = PRIMARY_NAV_IDS.length; guard > 0; guard--) {
+    if (navPrimary.scrollWidth <= navPrimary.clientWidth) break;
+    const spare = [...navPrimary.children].reverse().find((btn) => btn !== active);
+    if (!spare) break;
+    navMoreMenu.insertBefore(spare, navMoreAnchor);
+    // Ohne Burger-Knopf käme man an einen ausgelagerten Punkt nicht mehr heran.
+    navMoreToggle.hidden = false;
+    moved = true;
+  }
+  if (moved) sortMoreMenu();
+  return moved;
+}
 
 function syncMobileNav() {
   const mobile = window.innerWidth <= MOBILE_NAV_BREAKPOINT;
@@ -194,6 +227,13 @@ function syncMobileNav() {
   // das Burger-Menü zeigen könnte; auf dem Handy braucht es jeder, um an die
   // ausgelagerten Kernpunkte zu kommen.
   navMoreToggle.hidden = !(currentIsAdmin || mobile);
+
+  // Bleibt die Leiste zu breit, wird ausgelagert – und der Punkt, in dem man
+  // gerade steht, rückt dabei nach vorne. Auf einem Bildschirm, auf dem alles
+  // hinpasst, bleibt die gewohnte Reihenfolge dagegen unangetastet.
+  if (trimPrimaryNav(active) && active && active.parentElement === navPrimary) {
+    navPrimary.insertBefore(active, navPrimary.firstChild);
+  }
 }
 syncMobileNav();
 // Debounced: ein Resize feuert viele Events, ein Layout-Umbau reicht einmal.
@@ -2498,8 +2538,8 @@ function renderPdfTemplates() {
       <td>${t.layout === "formular" ? "Formular" : "Standard"}</td>
       <td>${esc(t.font_family)} ${t.font_size} pt</td>
       <td>
-        <span class="swatch" style="background:${esc(t.accent_color)}"></span>
-        <span class="swatch" style="background:${esc(t.header_color)}"></span>
+        <span class="swatch" data-color="${esc(t.accent_color)}"></span>
+        <span class="swatch" data-color="${esc(t.header_color)}"></span>
       </td>
       <td>${t.is_default ? "★ Vorgabe" : ""}</td>
       <td class="actions">
@@ -2509,6 +2549,13 @@ function renderPdfTemplates() {
         ${t.is_default ? "" : `<button class="link" data-act="default" title="Als Vorgabe setzen">★ <span>Vorgabe</span></button>`}
         <button class="danger" data-act="delete" title="Vorlage löschen">🗑️ <span>löschen</span></button>
       </td>`;
+    // Die Farbe wird per CSSOM gesetzt, nicht als style-Attribut: die CSP
+    // erlaubt keine Inline-Styles (style-src 'self'), ein
+    // style="background:..." verwirft der Browser – die beiden Kästchen
+    // blieben dann leer. Gleiche Stelle wie bei den Diagrammbalken oben.
+    tr.querySelectorAll(".swatch").forEach((sw) => {
+      sw.style.background = sw.dataset.color;
+    });
     tr.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.onclick = () => templateAction(btn.dataset.act, t);
     });
@@ -2658,6 +2705,10 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closePdfTemplateMenu();
 });
+// Das Menü steht fest im Fenster (position: fixed) und wird einmal aus der
+// Position der Zeile berechnet. Scrollt die Seite oder die Tabelle weiter,
+// wandert die Zeile darunter weg – dann lieber zumachen als daneben stehen.
+window.addEventListener("scroll", closePdfTemplateMenu, true);
 
 // ---------------------- Benutzerverwaltung (Admin) ----------------------
 async function loadUsers() {
@@ -2778,7 +2829,7 @@ async function loadBackups() {
       <td>${new Date(b.modified).toLocaleString("de-DE")}</td>
       <td class="col-num">${(b.size / 1024).toFixed(0)} KB</td>
       <td class="actions">
-        <a class="link" href="/api/admin/backups/${encodeURIComponent(b.name)}/download" title="Herunterladen">⬇️ <span>Download</span></a>
+        <a class="link" href="/api/admin/backups/${encodeURIComponent(b.name)}/download" title="Backup herunterladen">⬇️ <span>herunterladen</span></a>
         <button class="danger" title="Datenbank mit diesem Backup überschreiben">♻️ <span>wiederherstellen</span></button>
       </td>`;
     tr.querySelector("button").onclick = () => restoreBackup(b.name);

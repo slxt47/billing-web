@@ -1454,6 +1454,71 @@ test("Auf einem breiten Bildschirm bleibt die volle Leiste stehen", async () => 
   assert.equal(primary.querySelectorAll("button").length, 9);
 });
 
+/** jsdom rechnet kein Layout – scrollWidth und clientWidth sind dort immer 0.
+ *  Für die Frage "passt die Leiste noch?" werden beide deshalb vorgegeben:
+ *  jeder Knopf zählt 100 breit, die Leiste kann `visible` davon zeigen. */
+function fakeNavWidth(window, visible) {
+  const primary = window.document.querySelector("#nav-primary");
+  Object.defineProperty(primary, "scrollWidth",
+                        { configurable: true, get: () => primary.children.length * 100 });
+  Object.defineProperty(primary, "clientWidth",
+                        { configurable: true, get: () => visible * 100 });
+  return primary;
+}
+
+test("Reicht die Breite nicht, wandern die hinteren Punkte ins Burger-Menü", async () => {
+  const { window } = startApp({ innerWidth: 1200 });
+  await settle();
+  const primary = fakeNavWidth(window, 3);
+
+  window.document.querySelector("#nav-history").click();
+  await settle(20);
+
+  // Drei Knöpfe bleiben stehen, der aktive davon ganz vorne.
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id),
+                   ["nav-history", "nav-dashboard", "nav-new"]);
+
+  // Die ausgelagerten stehen im Burger-Menü, in ihrer gewohnten Reihenfolge
+  // und vor den Verwaltungspunkten.
+  const menu = window.document.querySelector("#nav-more-menu");
+  const ids = [...menu.querySelectorAll("button")].map((b) => b.id);
+  assert.deepEqual(ids.slice(0, 6),
+                   ["nav-quotes", "nav-delivery", "nav-credit", "nav-reports",
+                    "nav-customers", "nav-products"]);
+  assert.equal(ids[6], "nav-settings", "danach folgen die Verwaltungspunkte");
+  assert.equal(window.document.querySelector("#nav-more-toggle").hidden, false,
+               "sonst käme man an die ausgelagerten Punkte nicht mehr heran");
+});
+
+test("Der aktive Punkt wandert nie ins Burger-Menü, auch nicht der letzte", async () => {
+  const { window } = startApp({ innerWidth: 1200 });
+  await settle();
+  const primary = fakeNavWidth(window, 1);
+
+  // Der letzte Punkt der Leiste ist der ungünstigste Fall: er müsste als
+  // erster weichen, ist aber der aktive.
+  window.document.querySelector("#nav-products").click();
+  await settle(20);
+
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id),
+                   ["nav-products"]);
+  assert.ok(window.document.querySelector("#nav-more-menu #nav-dashboard"));
+});
+
+test("Passt alles, bleibt die gewohnte Reihenfolge unangetastet", async () => {
+  const { window } = startApp({ innerWidth: 1200 });
+  await settle();
+  const primary = fakeNavWidth(window, 9);
+
+  window.document.querySelector("#nav-history").click();
+  await settle(20);
+
+  // Kein Auslagern, also rückt auch nichts nach vorne – Dashboard bleibt erster.
+  assert.deepEqual([...primary.querySelectorAll("button")].map((b) => b.id).slice(0, 2),
+                   ["nav-dashboard", "nav-new"]);
+  assert.equal(primary.querySelectorAll("button").length, 9);
+});
+
 const SIX_MONTHS = {
   ...STATS,
   months: [
@@ -1520,6 +1585,24 @@ test("Die Vorlagenliste steht in den Firmendaten", async () => {
   assert.ok(rows[1].querySelector("button[data-act=default]"));
   assert.match(rows[0].textContent, /Standard/);
   assert.match(rows[1].textContent, /Formular/, "das Layout steht in der Liste");
+});
+
+test("Die Farbfelder der Vorlagen bekommen ihre Farbe per CSSOM", async () => {
+  // Ein style-Attribut im innerHTML verwirft der Browser: die CSP erlaubt
+  // keine Inline-Styles (style-src 'self'), die Kästchen blieben leer.
+  const { window } = startApp({ routes: { "/api/pdf-templates": TEMPLATES } });
+  await settle();
+  window.document.querySelector("#nav-settings").click();
+  await settle(50);
+
+  const row = window.document.querySelector("#template-body tr");
+  const swatches = [...row.querySelectorAll(".swatch")];
+  assert.equal(swatches.length, 2);
+  // Die Farbe kommt als data-color durch die Markierung und wird erst danach
+  // per CSSOM gesetzt – ein style="..." im HTML selbst würde die CSP kippen.
+  assert.equal(swatches[0].dataset.color, "#2d6cdf");
+  assert.match(swatches[0].style.background, /#2d6cdf|rgb\(45, 108, 223\)/);
+  assert.match(swatches[1].style.background, /#2d3748|rgb\(45, 55, 72\)/);
 });
 
 test("Das Layout einer Vorlage geht mit zum Server und wieder zurück ins Formular",

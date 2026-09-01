@@ -103,7 +103,7 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import und -Export),
     Admin-Endpunkte, Auswertungen (inkl. freiem Report-Builder), Response-Cache,
     Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 110 Frontend-Tests in backend/tests/frontend/, die die
+    backend/. Dazu 114 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
     Logo-Upload, Kunden-/Artikelimport und -export, Beispieldateien als
@@ -383,6 +383,21 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Bearbeitungssperre und Anwesenheitsanzeige nebeneinander an zwei
     Benutzern zeigt. GitHub rendert ```mermaid-Blöcke in .md-Dateien nativ,
     es braucht also keine zusätzliche Bibliothek oder einen Renderschritt.
+[X] WORKINSTRUCTIONS.md neu gefasst, damit die Anweisungen eindeutig sind:
+    aus sechs Stichpunkten wurden sechs überschriebene Abschnitte, jeder sagt
+    jetzt, was konkret zu tun ist statt nur, worum es geht. Wichtigste
+    inhaltliche Korrektur: der Eingang für neue Aufgaben wird über die
+    Überschrift „TODO's“ angesprochen statt über eine feste Abschnittsnummer –
+    die Nummer verschiebt sich bei jedem neu angelegten Abschnitt und stand
+    schon zweimal falsch da. Dazu präzise Testbefehle (python3, venv-Weg,
+    wenn pytest im System fehlt), die Rollenverteilung der drei
+    Dokumentationsdateien (README = Benutzersicht, Technical_documentation =
+    Bauweise, TODO = Stand), der Vorrang des Prompts vor diesen Regeln und
+    zwei Fallen der Testumgebung, die schon Zeit gekostet haben (jsdom rechnet
+    kein Layout: scrollWidth/clientWidth sind 0, scrollIntoView fehlt ganz).
+    Neu dazugekommen ist Punkt 6: für abgrenzbare Teilarbeiten eigene Agenten
+    starten, mehrere gleichzeitig statt nacheinander, und deren Befunde vor
+    dem Weitergeben selbst im Code nachprüfen.
 
 
 --------------------------------------------------------------------------------
@@ -402,6 +417,14 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
 --------------------------------------------------------------------------------
 9. IDEEN / NOCH NICHT EINGEPLANT
 --------------------------------------------------------------------------------
+[ ] Emoji-Sprache vereinheitlichen (aus dem Knopf-Durchgang, bewusst nicht
+    im selben Zug geändert, weil es reine Geschmacksfragen sind und an
+    mehreren Stellen gleichzeitig sitzt): ↩️ steht heute für drei Dinge
+    (Gutschrift, Storno rückgängig, wieder öffnen), 📄 sowohl für „zu
+    Angebot“ als auch für die CSV-Beispieldatei, 🧾 für „zu Rechnung“, die
+    JSON-Beispieldatei und das App-Logo. Dieselbe Aktion heißt außerdem bei
+    Rechnung/Gutschrift „zurück“ und beim Lieferschein „wieder öffnen“.
+
 Sonst ist hier nichts geparkt.
 
 
@@ -440,6 +463,55 @@ Sonst ist hier nichts geparkt.
     beschrieben; ein Resize (mit 150 ms Verzögerung, kein Event-Sturm) und
     jeder Ansichtswechsel stellen die Zuordnung neu ein, der Burger-Knopf
     selbst steht auf dem Handy jedem Benutzer offen, nicht nur Admins.
+[X] Der Menüpunkt, in dem man gerade steht, ist immer sichtbar – auch
+    zwischen Handy und breitem Bildschirm. Die 600-px-Grenze allein reichte
+    nicht: mit neun Kernpunkten läuft die Leiste auch bei 700 px über, sie
+    scrollt dann seitwärts, und ausgerechnet der aktive Punkt konnte dabei
+    aus dem sichtbaren Streifen wandern. Jetzt lagert app.js
+    (trimPrimaryNav) nach dem Handy-Durchgang so lange den hintersten
+    Knopf ins Burger-Menü aus, wie navPrimary.scrollWidth größer als
+    clientWidth ist – den aktiven nie, eine Zählschleife begrenzt das Ganze.
+    Sobald etwas ausgelagert wurde, wird der Burger-Knopf sichtbar (sonst
+    käme man an die ausgelagerten Ansichten nicht mehr heran), die
+    ausgelagerten Kernpunkte werden im Menü wieder in ihre gewohnte
+    Reihenfolge gebracht (sortMoreMenu) statt in der Reihenfolge zu stehen,
+    in der sie zufällig ausgelagert wurden, und der aktive Punkt rückt in der
+    Leiste an die erste Stelle. Passt alles auf den Bildschirm, bleibt die
+    gewohnte Reihenfolge unangetastet – die Knöpfe sollen nicht bei jedem
+    Ansichtswechsel umherspringen. Jeder Durchgang setzt zuerst alle Knöpfe
+    in die Leiste zurück, das Auslagern kann sich also nicht aufschaukeln:
+    ein breiteres Fenster holt genau so viele Knöpfe zurück, wie jetzt
+    hineinpassen. In jsdom gibt es kein Layout (scrollWidth und clientWidth
+    sind 0) und kein scrollIntoView; die drei neuen Frontend-Tests geben die
+    Breiten deshalb selbst vor (fakeNavWidth).
+[X] Durchgang über alle Knöpfe der Oberfläche (74 Stück in index.html, dazu
+    die in app.js erzeugten Tabellenzeilen). Ergebnis vorweg: kein toter
+    Knopf, kein Selektor in app.js, der ins Leere zeigt, keine doppelte id,
+    kein Knopf im Formular ohne type, kein reiner Symbolknopf ohne title.
+    Behoben wurden vier echte Fehler:
+    * Die beiden Farbfelder in der PDF-Vorlagenliste blieben leer. Sie
+      bekamen ihre Farbe über ein style-Attribut im innerHTML, und genau das
+      verwirft der Browser wegen der CSP (style-src 'self' ohne
+      unsafe-inline). Jetzt reist die Farbe als data-color mit und wird per
+      CSSOM gesetzt – derselbe Weg, den die Diagrammbalken im Dashboard
+      schon gehen.
+    * Trefferflächen auf dem Handy: Zeilenknöpfe (rund 25 px hoch),
+      Banner-✕ (rund 20 px) und der Burger-Knopf (rund 34 px) waren mit dem
+      Finger kaum sicher zu treffen. Unter 600 px Breite haben sie jetzt
+      min-height 44px, die beiden Symbolknöpfe zusätzlich min-width 44px,
+      und die Knopfreihen stehen etwas weiter auseinander. Schriftgrößen
+      bleiben unverändert, am Desktop ändert sich nichts.
+    * Ein langer Benutzername konnte die Menüleiste aus dem Bild drücken:
+      .nav-user stand auf flex: 0 0 auto und konnte nicht schrumpfen, die
+      ganze Seite scrollte dann seitwärts. Jetzt schrumpft der Name und wird
+      notfalls mit Auslassungspunkten abgeschnitten.
+    * Das Auswahlfenster für die PDF-Vorlage steht fest im Fenster
+      (position: fixed) und wurde einmalig aus der Zeilenposition berechnet.
+      Beim Weiterscrollen blieb es stehen, während die Zeile darunter
+      wegwanderte. Ein Scroll-Listener schließt es jetzt.
+    Dazu eine Beschriftung geradegerückt: der Backup-Download hieß „⬇️
+    Download“ bei einem title „Herunterladen“ – als einziger englischer
+    Knopf der App. Jetzt „⬇️ herunterladen“, title „Backup herunterladen“.
 
 
 --------------------------------------------------------------------------------
@@ -450,6 +522,23 @@ Aktuell nichts Neues.
 --------------------------------------------------------------------------------
 12. CHANGELOG
 --------------------------------------------------------------------------------
+2026-09-01, vierzehnter Durchgang
+  * Der Menüpunkt, in dem man gerade steht, ist jetzt immer sichtbar: reicht
+    die Breite nicht, wandern die hinteren Knöpfe einzeln ins Burger-Menü und
+    der aktive rückt an die erste Stelle (Abschnitt 10). Die feste
+    600-px-Grenze allein reichte dafür nicht, gemessen wird jetzt die
+    tatsächliche Breite der Leiste.
+  * WORKINSTRUCTIONS.md neu gefasst, damit die Anweisungen eindeutig sind
+    (Abschnitt 7). Der Eingang für neue Aufgaben wird nicht mehr über eine
+    feste Abschnittsnummer angesprochen, die verschiebt sich ja gerade durch
+    Punkt 5 selbst.
+  * Durchgang über alle Knöpfe: die Farbfelder der PDF-Vorlagen blieben wegen
+    der CSP leer, die Trefferflächen auf dem Handy waren zu klein, ein langer
+    Benutzername schob die Menüleiste aus dem Bild, das Vorlagen-Auswahlfenster
+    blieb beim Scrollen stehen, und der Backup-Download war der einzige
+    englisch beschriftete Knopf – alles fünf behoben (Abschnitt 10).
+  * Teststand: 251 Backend- und 114 Frontend-Tests.
+
 2026-09-01, dreizehnter Durchgang
   * Beispieldateien für alles, was sich importieren lässt: Kunden und Artikel,
     je als Massenimport und als Einzelsatz, je in CSV und JSON – acht
