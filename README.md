@@ -12,7 +12,7 @@ audited by a third party**. It ships with a guided production setup script
 dedicated non-root service user and can wire up real SMTP and a Let's-Encrypt
 certificate. CSRF protection, per-IP rate limiting, security response headers
 (CSP, HSTS, X-Frame-Options …), hardened session cookies, structured logging
-and an automated test suite (249 Backend- + 102 Frontend-Tests) with CI are
+and an automated test suite (251 Backend- + 114 Frontend-Tests) with CI are
 in place.
 
 Still open before you point this at real customer data: no external
