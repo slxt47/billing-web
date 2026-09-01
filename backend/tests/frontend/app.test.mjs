@@ -1759,7 +1759,7 @@ function captureDownloads(window) {
   return downloads;
 }
 
-test("Die Beispieldatei fragt erst nach dem Format", async () => {
+test("Die Beispieldatei fragt erst nach Format und Umfang", async () => {
   const { window } = startApp();
   await settle();
   window.document.querySelector("#nav-customers").click();
@@ -1774,10 +1774,11 @@ test("Die Beispieldatei fragt erst nach dem Format", async () => {
   assert.equal(menu.hidden, false, "der Knopf öffnet das Auswahlfenster");
   assert.equal(button.getAttribute("aria-expanded"), "true");
   assert.deepEqual([...menu.querySelectorAll("button[data-example]")]
-                     .map((b) => b.dataset.example), ["csv", "json"]);
+                     .map((b) => `${b.dataset.example}/${b.dataset.scope}`),
+                   ["csv/bulk", "json/bulk", "csv/single", "json/single"]);
 });
 
-test("Beispieldatei als CSV", async () => {
+test("Beispieldatei als CSV – mehrere Kunden", async () => {
   const { window } = startApp();
   await settle();
   window.document.querySelector("#nav-customers").click();
@@ -1785,13 +1786,14 @@ test("Beispieldatei als CSV", async () => {
   const downloads = captureDownloads(window);
 
   window.document.querySelector("#customer-import-example").click();
-  window.document.querySelector("[data-example=csv]").click();
+  window.document.querySelector("[data-example=csv][data-scope=bulk]").click();
 
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].name, "kunden-vorlage.csv");
   const text = downloads[0].content;
   assert.match(text.split("\r\n")[0], /^\ufeff?Name;E-Mail;/);
   assert.match(text, /Muster GmbH;info@muster\.example/);
+  assert.equal(text.split("\r\n").length, 4, "Kopfzeile plus drei Kunden");
   assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, true,
                "nach der Auswahl schließt sich das Fenster");
 });
@@ -1804,15 +1806,72 @@ test("Beispieldatei als JSON – im Format, das der Import versteht", async () =
   const downloads = captureDownloads(window);
 
   window.document.querySelector("#customer-import-example").click();
-  window.document.querySelector("[data-example=json]").click();
+  window.document.querySelector("[data-example=json][data-scope=bulk]").click();
 
   assert.equal(downloads.length, 1);
   assert.equal(downloads[0].name, "kunden-vorlage.json");
   const data = JSON.parse(downloads[0].content);
   assert.ok(Array.isArray(data.customers), "{\"customers\": [...]}");
+  assert.equal(data.customers.length, 3);
   assert.equal(data.customers[0].name, "Muster GmbH");
   assert.equal(data.customers[0].payment_term_days, 30);
   assert.equal(window.document.querySelector("#customer-import-example-menu").hidden, true);
+});
+
+test("Beispieldatei für einen einzelnen Kunden", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-customers").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  window.document.querySelector("#customer-import-example").click();
+  window.document.querySelector("[data-example=csv][data-scope=single]").click();
+  assert.equal(downloads[0].name, "kunden-vorlage-einzeln.csv");
+  assert.equal(downloads[0].content.split("\r\n").length, 2,
+               "Kopfzeile plus genau ein Kunde");
+
+  window.document.querySelector("#customer-import-example").click();
+  window.document.querySelector("[data-example=json][data-scope=single]").click();
+  assert.equal(downloads[1].name, "kunden-vorlage-einzeln.json");
+  const data = JSON.parse(downloads[1].content);
+  // Einzelobjekt statt Liste – so sieht auch der DSGVO-Export je Kunde aus.
+  assert.equal(data.customers, undefined);
+  assert.equal(data.customer.name, "Muster GmbH");
+});
+
+test("Beispieldateien für den Artikelimport", async () => {
+  const { window } = startApp();
+  await settle();
+  window.document.querySelector("#nav-products").click();
+  await settle();
+  const downloads = captureDownloads(window);
+
+  const menu = window.document.querySelector("#product-import-example-menu");
+  assert.equal(menu.hidden, true);
+  window.document.querySelector("#product-import-example").click();
+  assert.equal(menu.hidden, false);
+
+  menu.querySelector("[data-example=csv][data-scope=bulk]").click();
+  assert.equal(downloads[0].name, "artikel-vorlage.csv");
+  assert.match(downloads[0].content.split("\r\n")[0], /^\ufeff?Name;Standardpreis$/);
+  assert.match(downloads[0].content, /Montagestunde;89\.5/);
+  assert.equal(menu.hidden, true);
+
+  window.document.querySelector("#product-import-example").click();
+  menu.querySelector("[data-example=json][data-scope=bulk]").click();
+  assert.equal(downloads[1].name, "artikel-vorlage.json");
+  assert.equal(JSON.parse(downloads[1].content).products.length, 3);
+
+  window.document.querySelector("#product-import-example").click();
+  menu.querySelector("[data-example=json][data-scope=single]").click();
+  assert.equal(downloads[2].name, "artikel-vorlage-einzeln.json");
+  assert.equal(JSON.parse(downloads[2].content).product.name, "Montagestunde");
+
+  window.document.querySelector("#product-import-example").click();
+  menu.querySelector("[data-example=csv][data-scope=single]").click();
+  assert.equal(downloads[3].name, "artikel-vorlage-einzeln.csv");
+  assert.equal(downloads[3].content.split("\r\n").length, 2);
 });
 
 test("Ein Klick daneben schließt das Auswahlfenster", async () => {
@@ -2095,6 +2154,7 @@ test("Leere Hinweisbanner werden nicht angezeigt", () => {
                      "#delivery-presence", "#invoice-draft-banner",
                      "#quote-draft-banner", "#delivery-draft-banner",
                      "#customer-import-file", "#customer-import-example-menu",
+                     "#product-import-example-menu",
                      "#history-msg"]) {
     const el = dom.window.document.querySelector(sel);
     assert.equal(el.hidden, true, `${sel}: hidden-Attribut`);

@@ -630,9 +630,15 @@
           <button type="button" id="customer-import-example" class="secondary"
                   aria-haspopup="true" aria-expanded="false">📄 Beispieldatei herunterladen</button>
           <div id="customer-import-example-menu" class="popover" hidden>
-            <p class="popover-title">In welchem Format?</p>
-            <button type="button" class="secondary" data-example="csv">📄 CSV</button>
-            <button type="button" class="secondary" data-example="json">🧾 JSON</button>
+            <p class="popover-title">Welche Beispieldatei?</p>
+            <button type="button" class="secondary" data-example="csv"
+                    data-scope="bulk">📄 CSV – mehrere Kunden</button>
+            <button type="button" class="secondary" data-example="json"
+                    data-scope="bulk">🧾 JSON – mehrere Kunden</button>
+            <button type="button" class="secondary" data-example="csv"
+                    data-scope="single">📄 CSV – ein Kunde</button>
+            <button type="button" class="secondary" data-example="json"
+                    data-scope="single">🧾 JSON – ein Kunde</button>
           </div>
         </span>
       </div>
@@ -691,6 +697,21 @@
       <div class="bar">
         <input type="file" id="product-import-file" accept=".csv,.json,text/csv,application/json" hidden>
         <button type="button" id="product-import-btn" class="secondary">⬆️ Datei wählen &amp; importieren</button>
+        <span class="popover-anchor">
+          <button type="button" id="product-import-example" class="secondary"
+                  aria-haspopup="true" aria-expanded="false">📄 Beispieldatei herunterladen</button>
+          <div id="product-import-example-menu" class="popover" hidden>
+            <p class="popover-title">Welche Beispieldatei?</p>
+            <button type="button" class="secondary" data-example="csv"
+                    data-scope="bulk">📄 CSV – mehrere Artikel</button>
+            <button type="button" class="secondary" data-example="json"
+                    data-scope="bulk">🧾 JSON – mehrere Artikel</button>
+            <button type="button" class="secondary" data-example="csv"
+                    data-scope="single">📄 CSV – ein Artikel</button>
+            <button type="button" class="secondary" data-example="json"
+                    data-scope="single">🧾 JSON – ein Artikel</button>
+          </div>
+        </span>
       </div>
       <p id="product-import-msg" class="hint"></p>
 

@@ -518,6 +518,27 @@ export and re-import needs no manual editing. Built with `main._write_csv`
 (Python's `csv.writer`, not string concatenation), so a semicolon or
 quotation mark inside a customer name cannot shift the columns.
 
+IMPORT SAMPLE FILES (`app.js`: `EXAMPLE_CUSTOMERS`, `EXAMPLE_PRODUCTS`,
+`CUSTOMER_EXAMPLE`, `PRODUCT_EXAMPLE`, `downloadExample()`): both import
+views offer a "📄 Beispieldatei herunterladen" button, and each offers four
+files – bulk (three records) and single (one record), each as CSV and as
+JSON, i.e. eight sample files in total. They are generated in the browser,
+not served by the backend: `exampleCsv()` writes the header plus one line per
+record (`;`, CRLF, BOM in front so Excel gets the umlauts right),
+`exampleJson()` writes `{"customers": [...]}` / `{"products": [...]}` for the
+bulk case and `{"customer": {...}}` / `{"product": {...}}` for the single one
+– the single shape is the same one `GET /api/customers/{id}/export` produces,
+so both are shapes `_rows_from_json` already understands. File names:
+`kunden-vorlage.csv|json`, `kunden-vorlage-einzeln.csv|json`,
+`artikel-vorlage.csv|json`, `artikel-vorlage-einzeln.csv|json`. Everything
+comes out of one spec object per entity (rows, CSV header, matching field
+names, JSON list/single key, file base name), so a new column is added in one
+place. `setupExampleMenu(buttonSelector, menuSelector, spec)` wires both
+menus, including click-outside and Escape. Four backend tests
+(`test_customers_products.py`) feed all eight files back into the two import
+endpoints so the templates cannot drift away from the importer, and the
+jsdom tests check the generated names and content.
+
 SECURITY:
 - Password hashing: PBKDF2-HMAC-SHA256, 200,000 iterations, random 16-byte
   salt per user (backend/app/auth.py, stdlib only).
@@ -655,8 +676,8 @@ second line; on a merely narrower (not phone-sized) window it scrolls
 sideways within itself instead. The five admin-only buttons (Firma,
 Benutzer, Audit-Log, Backup, Monitoring) moved out of the bar entirely into
 `#nav-more-menu`, a popover behind the `#nav-more-toggle` "☰" button (same
-show/hide/click-outside/Escape pattern as the customer-import example-file
-menu – `toggleNavMoreMenu()`, mirroring `toggleExampleMenu()`; the click
+show/hide/click-outside/Escape pattern as the import example-file menus –
+`toggleNavMoreMenu()`, mirroring the `toggle()` inside `setupExampleMenu()`; the click
 handler on the menu itself is delegated to the container rather than bound
 per button, since buttons get moved in and out of it at runtime, see next
 paragraph). Moving a button into the popover doesn't touch its `id`, so the

@@ -142,7 +142,7 @@ for (const n of Object.keys(views)) {
 // Firma/Benutzer/Audit-Log/Backup/Monitoring stehen nicht fest in der
 // Leiste, sondern hinter dem Burger-Knopf – sonst bricht die Menüzeile bei
 // jedem Admin-Login um. Derselbe Auf/Zu-Mechanismus wie beim
-// Beispieldatei-Auswahlfenster (siehe unten, #customer-import-example-menu).
+// Beispieldatei-Auswahlfenster (siehe unten, setupExampleMenu).
 const navMoreToggle = $("#nav-more-toggle");
 const navMoreMenu = $("#nav-more-menu");
 
@@ -1085,9 +1085,10 @@ $("#customer-form").addEventListener("submit", async (e) => {
 // Ergänzung zur Eingabemaske: eine bestehende Kundenliste (Excel/CSV) lässt
 // sich in einem Rutsch übernehmen. Ausgewertet wird die Datei serverseitig
 // (POST /api/customers/import), hier hängt nur die Bedienung dran.
-// Vorlage gibt es in beiden Formaten, die der Import versteht – CSV und JSON
-// (JSON schluckt auch den Kundenexport dieser App). Beide werden aus denselben
-// Beispieldaten erzeugt, damit sie nicht auseinanderlaufen.
+// Vorlagen gibt es in beiden Formaten, die der Import versteht – CSV und JSON
+// (JSON schluckt auch den Kundenexport dieser App), und jeweils in zwei
+// Größen: als Massenimport mit mehreren Datensätzen und als Einzelsatz. Alle
+// vier entstehen aus denselben Beispieldaten, damit sie nicht auseinanderlaufen.
 const EXAMPLE_CUSTOMERS = [
   { name: "Muster GmbH", email: "info@muster.example", contact_person: "Frau Muster",
     address: "Musterweg 1, 12345 Musterstadt",
@@ -1095,17 +1096,62 @@ const EXAMPLE_CUSTOMERS = [
   { name: "Beispiel AG", email: "kontakt@beispiel.example", contact_person: "Herr Beispiel",
     address: "Beispielstr. 2, 54321 Beispielstadt",
     payment_term_days: 14, skonto_percent: 0, skonto_days: 0 },
+  { name: "Probe KG", email: "buero@probe.example", contact_person: "Frau Probe",
+    address: "Probegasse 3, 67890 Probedorf",
+    payment_term_days: 21, skonto_percent: 3, skonto_days: 10 },
 ];
-const EXAMPLE_CSV_HEADER = ["Name", "E-Mail", "Ansprechpartner", "Anschrift",
-                            "Zahlungsfrist", "Skonto", "Skonto_Tage"];
-const EXAMPLE_CSV_FIELDS = ["name", "email", "contact_person", "address",
-                            "payment_term_days", "skonto_percent", "skonto_days"];
+const EXAMPLE_PRODUCTS = [
+  { name: "Montagestunde", unit_price: 89.5 },
+  { name: "Anfahrtspauschale", unit_price: 45 },
+  { name: "Schaltschrank Grundausstattung", unit_price: 1250 },
+];
 
-const CSV_EXAMPLE = [
-  EXAMPLE_CSV_HEADER.join(";"),
-  ...EXAMPLE_CUSTOMERS.map((c) => EXAMPLE_CSV_FIELDS.map((f) => c[f]).join(";")),
-].join("\r\n");
-const JSON_EXAMPLE = JSON.stringify({ customers: EXAMPLE_CUSTOMERS }, null, 2);
+// Eine Vorlagenbeschreibung je Import: Spaltenüberschriften, die passenden
+// Feldnamen, die JSON-Schlüssel, die der Import versteht (Liste bzw.
+// Einzelobjekt) und der Dateiname ohne Endung.
+const CUSTOMER_EXAMPLE = {
+  rows: EXAMPLE_CUSTOMERS,
+  header: ["Name", "E-Mail", "Ansprechpartner", "Anschrift",
+           "Zahlungsfrist", "Skonto", "Skonto_Tage"],
+  fields: ["name", "email", "contact_person", "address",
+           "payment_term_days", "skonto_percent", "skonto_days"],
+  listKey: "customers", singleKey: "customer", basename: "kunden-vorlage",
+};
+const PRODUCT_EXAMPLE = {
+  rows: EXAMPLE_PRODUCTS,
+  header: ["Name", "Standardpreis"],
+  fields: ["name", "unit_price"],
+  listKey: "products", singleKey: "product", basename: "artikel-vorlage",
+};
+
+/** Beispieldatensätze als CSV – Semikolon, wie es Excel hierzulande erwartet. */
+function exampleCsv(spec, rows) {
+  return [
+    spec.header.join(";"),
+    ...rows.map((r) => spec.fields.map((f) => r[f]).join(";")),
+  ].join("\r\n");
+}
+
+/** Dieselben Datensätze als JSON: mehrere unter dem Listenschlüssel, ein
+ *  einzelner als Einzelobjekt – beides versteht der Import (main.py:
+ *  _rows_from_json). */
+function exampleJson(spec, rows, single) {
+  return JSON.stringify(single ? { [spec.singleKey]: rows[0] }
+                               : { [spec.listKey]: rows }, null, 2);
+}
+
+function downloadExample(spec, format, scope) {
+  const single = scope === "single";
+  const rows = single ? spec.rows.slice(0, 1) : spec.rows;
+  const name = `${spec.basename}${single ? "-einzeln" : ""}.${format}`;
+  if (format === "json") {
+    downloadFile(name, exampleJson(spec, rows, single),
+                 "application/json;charset=utf-8");
+  } else {
+    // BOM voran, sonst zeigt Excel die Umlaute falsch an.
+    downloadFile(name, "\ufeff" + exampleCsv(spec, rows), "text/csv;charset=utf-8");
+  }
+}
 
 function importMessage(text, cls) {
   const msg = $("#customer-import-msg");
@@ -1129,41 +1175,40 @@ function downloadUrl(url, name = "") {
 }
 
 // Der Knopf lädt nicht sofort herunter, sondern fragt in einem kleinen Fenster
-// nach dem Format – die Vorlage gibt es als CSV und als JSON.
-const exampleMenu = $("#customer-import-example-menu");
-const exampleButton = $("#customer-import-example");
+// nach Format und Umfang. Klick daneben oder Escape schließt das Fenster
+// wieder. Denselben Aufbau nutzen Kunden- und Artikelimport.
+function setupExampleMenu(buttonSelector, menuSelector, spec) {
+  const menu = $(menuSelector);
+  const button = $(buttonSelector);
+  if (!menu || !button) return;
 
-function toggleExampleMenu(open) {
-  exampleMenu.hidden = !open;
-  exampleButton.setAttribute("aria-expanded", open ? "true" : "false");
+  const toggle = (open) => {
+    menu.hidden = !open;
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  button.onclick = (e) => {
+    e.stopPropagation();
+    toggle(menu.hidden);
+  };
+
+  menu.querySelectorAll("button[data-example]").forEach((btn) => {
+    btn.onclick = () => {
+      downloadExample(spec, btn.dataset.example, btn.dataset.scope);
+      toggle(false);
+    };
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target)) toggle(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) toggle(false);
+  });
 }
 
-exampleButton.onclick = (e) => {
-  e.stopPropagation();
-  toggleExampleMenu(exampleMenu.hidden);
-};
-
-exampleMenu.querySelectorAll("button[data-example]").forEach((btn) => {
-  btn.onclick = () => {
-    if (btn.dataset.example === "json") {
-      downloadFile("kunden-vorlage.json", JSON_EXAMPLE,
-                   "application/json;charset=utf-8");
-    } else {
-      // BOM voran, sonst zeigt Excel die Umlaute falsch an.
-      downloadFile("kunden-vorlage.csv", "\ufeff" + CSV_EXAMPLE,
-                   "text/csv;charset=utf-8");
-    }
-    toggleExampleMenu(false);
-  };
-});
-
-// Klick daneben oder Escape schließt das Fenster wieder.
-document.addEventListener("click", (e) => {
-  if (!exampleMenu.hidden && !exampleMenu.contains(e.target)) toggleExampleMenu(false);
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !exampleMenu.hidden) toggleExampleMenu(false);
-});
+setupExampleMenu("#customer-import-example", "#customer-import-example-menu",
+                 CUSTOMER_EXAMPLE);
 
 // Kein zweistufiges "Datei auswählen" + "Importieren": der Knopf öffnet
 // direkt den Dateidialog, die Auswahl startet den Import.
@@ -1297,6 +1342,9 @@ function productImportMessage(text, cls) {
   msg.textContent = text;
   msg.className = cls ? cls : "hint";
 }
+
+setupExampleMenu("#product-import-example", "#product-import-example-menu",
+                 PRODUCT_EXAMPLE);
 
 $("#product-import-btn").onclick = () => $("#product-import-file").click();
 

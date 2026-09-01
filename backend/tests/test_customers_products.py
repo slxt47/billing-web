@@ -207,42 +207,128 @@ def test_import_reads_a_json_list_and_updates_by_name(user_client):
     assert customers["Neu AG"]["payment_term_days"] == 21
 
 
-def test_import_accepts_the_json_example_file(user_client):
-    """Die Vorlage, die das Frontend anbietet (app.js: EXAMPLE_CUSTOMERS),
-    muss sich ohne Nacharbeit wieder einlesen lassen."""
-    payload = {"customers": [
-        {"name": "Muster GmbH", "email": "info@muster.example",
-         "contact_person": "Frau Muster", "address": "Musterweg 1, 12345 Musterstadt",
-         "payment_term_days": 30, "skonto_percent": 2, "skonto_days": 7},
-        {"name": "Beispiel AG", "email": "kontakt@beispiel.example",
-         "contact_person": "Herr Beispiel", "address": "Beispielstr. 2, 54321 Beispielstadt",
-         "payment_term_days": 14, "skonto_percent": 0, "skonto_days": 0},
-    ]}
+# --------------------- Beispieldateien (Import-Vorlagen) --------------------
+# Die Vorlagen, die das Frontend zum Herunterladen anbietet (app.js:
+# EXAMPLE_CUSTOMERS, EXAMPLE_PRODUCTS), müssen sich ohne Nacharbeit wieder
+# einlesen lassen. Je Import gibt es vier Stück: Massenimport und Einzelsatz,
+# jeweils als CSV und als JSON. Hier stehen dieselben Daten noch einmal, damit
+# auffällt, wenn die Vorlage vom Import abdriftet.
+EXAMPLE_CUSTOMERS = [
+    {"name": "Muster GmbH", "email": "info@muster.example",
+     "contact_person": "Frau Muster", "address": "Musterweg 1, 12345 Musterstadt",
+     "payment_term_days": 30, "skonto_percent": 2, "skonto_days": 7},
+    {"name": "Beispiel AG", "email": "kontakt@beispiel.example",
+     "contact_person": "Herr Beispiel", "address": "Beispielstr. 2, 54321 Beispielstadt",
+     "payment_term_days": 14, "skonto_percent": 0, "skonto_days": 0},
+    {"name": "Probe KG", "email": "buero@probe.example",
+     "contact_person": "Frau Probe", "address": "Probegasse 3, 67890 Probedorf",
+     "payment_term_days": 21, "skonto_percent": 3, "skonto_days": 10},
+]
+CUSTOMER_EXAMPLE_HEADER = ["Name", "E-Mail", "Ansprechpartner", "Anschrift",
+                           "Zahlungsfrist", "Skonto", "Skonto_Tage"]
+CUSTOMER_EXAMPLE_FIELDS = ["name", "email", "contact_person", "address",
+                           "payment_term_days", "skonto_percent", "skonto_days"]
+
+EXAMPLE_PRODUCTS = [
+    {"name": "Montagestunde", "unit_price": 89.5},
+    {"name": "Anfahrtspauschale", "unit_price": 45},
+    {"name": "Schaltschrank Grundausstattung", "unit_price": 1250},
+]
+PRODUCT_EXAMPLE_HEADER = ["Name", "Standardpreis"]
+PRODUCT_EXAMPLE_FIELDS = ["name", "unit_price"]
+
+
+def example_csv(header, fields, rows):
+    """Baut die CSV-Vorlage genauso zusammen wie app.js (exampleCsv)."""
+    lines = [";".join(header)]
+    lines += [";".join(str(row[field]) for field in fields) for row in rows]
+    return "\r\n".join(lines)
+
+
+def test_import_accepts_the_customer_example_files(user_client):
+    """Kunden-Massenvorlage, beide Formate."""
+    payload = {"customers": EXAMPLE_CUSTOMERS}
     result = user_client.post(
         "/api/customers/import",
         files={"file": ("kunden-vorlage.json", json.dumps(payload).encode(),
                         "application/json")},
     ).json()
-    assert (result["created"], result["updated"], result["skipped"]) == (2, 0, 0)
+    assert (result["created"], result["updated"], result["skipped"]) == (3, 0, 0)
 
     customers = {c["name"]: c for c in user_client.get("/api/customers").json()}
     assert customers["Muster GmbH"]["payment_term_days"] == 30
     assert customers["Muster GmbH"]["skonto_days"] == 7
     assert customers["Beispiel AG"]["email"] == "kontakt@beispiel.example"
+    assert customers["Probe KG"]["skonto_percent"] == 3
 
-
-def test_import_accepts_the_csv_example_file(user_client):
-    """Gegenstück zur JSON-Vorlage: dieselben Daten als CSV (app.js:
-    EXAMPLE_CSV_HEADER)."""
-    csv_content = (
-        "Name;E-Mail;Ansprechpartner;Anschrift;Zahlungsfrist;Skonto;Skonto_Tage\r\n"
-        "Muster GmbH;info@muster.example;Frau Muster;"
-        "Musterweg 1, 12345 Musterstadt;30;2;7\r\n"
-        "Beispiel AG;kontakt@beispiel.example;Herr Beispiel;"
-        "Beispielstr. 2, 54321 Beispielstadt;14;0;0\r\n"
-    )
+    csv_content = example_csv(CUSTOMER_EXAMPLE_HEADER, CUSTOMER_EXAMPLE_FIELDS,
+                              EXAMPLE_CUSTOMERS) + "\r\n"
     result = upload_csv(user_client, csv_content, name="kunden-vorlage.csv").json()
-    assert (result["created"], result["updated"], result["skipped"]) == (2, 0, 0)
+    # Dieselben drei Kunden wie eben: nichts Neues, nur aktualisiert.
+    assert (result["created"], result["updated"], result["skipped"]) == (0, 3, 0)
+
+
+def test_import_accepts_the_single_customer_example_files(user_client):
+    """Einzelsatz-Vorlage: JSON als {"customer": {...}}, CSV mit einer Zeile."""
+    payload = {"customer": EXAMPLE_CUSTOMERS[0]}
+    result = user_client.post(
+        "/api/customers/import",
+        files={"file": ("kunden-vorlage-einzeln.json", json.dumps(payload).encode(),
+                        "application/json")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (1, 0, 0)
+    assert [c["name"] for c in user_client.get("/api/customers").json()] == ["Muster GmbH"]
+
+    csv_content = example_csv(CUSTOMER_EXAMPLE_HEADER, CUSTOMER_EXAMPLE_FIELDS,
+                              EXAMPLE_CUSTOMERS[:1]) + "\r\n"
+    result = upload_csv(user_client, csv_content,
+                        name="kunden-vorlage-einzeln.csv").json()
+    assert (result["created"], result["updated"], result["skipped"]) == (0, 1, 0)
+
+
+def test_import_accepts_the_product_example_files(user_client):
+    """Artikel-Massenvorlage, beide Formate."""
+    payload = {"products": EXAMPLE_PRODUCTS}
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel-vorlage.json", json.dumps(payload).encode(),
+                        "application/json")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (3, 0, 0)
+
+    products = {p["name"]: p for p in user_client.get("/api/products").json()}
+    assert products["Montagestunde"]["unit_price"] == 89.5
+    assert products["Anfahrtspauschale"]["unit_price"] == 45.0
+    assert products["Schaltschrank Grundausstattung"]["unit_price"] == 1250.0
+
+    csv_content = example_csv(PRODUCT_EXAMPLE_HEADER, PRODUCT_EXAMPLE_FIELDS,
+                              EXAMPLE_PRODUCTS) + "\r\n"
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel-vorlage.csv", csv_content.encode(), "text/csv")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (0, 3, 0)
+
+
+def test_import_accepts_the_single_product_example_files(user_client):
+    """Einzelsatz-Vorlage für Artikel: {"product": {...}} bzw. eine CSV-Zeile."""
+    payload = {"product": EXAMPLE_PRODUCTS[0]}
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel-vorlage-einzeln.json", json.dumps(payload).encode(),
+                        "application/json")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (1, 0, 0)
+    assert [p["name"] for p in user_client.get("/api/products").json()] == ["Montagestunde"]
+
+    csv_content = example_csv(PRODUCT_EXAMPLE_HEADER, PRODUCT_EXAMPLE_FIELDS,
+                              EXAMPLE_PRODUCTS[:1]) + "\r\n"
+    result = user_client.post(
+        "/api/products/import",
+        files={"file": ("artikel-vorlage-einzeln.csv", csv_content.encode(),
+                        "text/csv")},
+    ).json()
+    assert (result["created"], result["updated"], result["skipped"]) == (0, 1, 0)
 
 
 def test_import_rejects_broken_json(user_client):

@@ -140,14 +140,18 @@ code and `TODO.md` first.
   die der Kunden-Export (📤, DSGVO Art. 15) ausgibt, sodass Export und Import
   zueinander passen. Gleiche Namen werden aktualisiert statt doppelt angelegt,
   fehlerhafte Datensätze einzeln gemeldet. Der Knopf öffnet direkt die
-  Dateiauswahl, der Import startet mit der Auswahl. Eine Vorlage gibt es über
+  Dateiauswahl, der Import startet mit der Auswahl. Vorlagen gibt es über
   „📄 Beispieldatei herunterladen“: der Knopf fragt in einem kleinen Fenster
-  nach dem Format und liefert dann `kunden-vorlage.csv` oder
-  `kunden-vorlage.json`.
+  nach Format und Umfang und liefert dann `kunden-vorlage.csv` /
+  `kunden-vorlage.json` (mehrere Kunden, für den Massenimport) oder
+  `kunden-vorlage-einzeln.csv` / `kunden-vorlage-einzeln.json` (ein einzelner
+  Kunde).
 - **Artikel-Import (CSV oder JSON)** – dasselbe Prinzip im Reiter „Artikel“,
   nur mit den zwei Feldern, die ein Artikel hat (Bezeichnung, Standardpreis).
   Eine vorhandene Bezeichnung wird im Preis aktualisiert statt doppelt
-  angelegt.
+  angelegt. Auch hier gibt es „📄 Beispieldatei herunterladen“ mit denselben
+  vier Varianten (`artikel-vorlage.csv` / `.json` und
+  `artikel-vorlage-einzeln.csv` / `.json`).
 - **CSV-Massenexport** – „⬇️ Alle als CSV“ bei Kunden **und** Artikeln lädt
   die komplette Liste als CSV, in denselben Spalten wie der Import – eine
   exportierte Datei lässt sich also ohne Nacharbeit wieder einlesen.

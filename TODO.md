@@ -2,7 +2,7 @@
 RECHNUNGS-APP – ROADMAP (TODO.md)
 ================================================================================
 
-Stand: 2026-08-31
+Stand: 2026-09-01
 
 KONVENTIONEN
 ------------
@@ -98,16 +98,16 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     eine X-Request-ID je Request in jeder Zeile und jedem Fehlerkörper,
     einheitliche Antworten {"detail", "request_id"} für HTTP-, Validierungs-
     und unbehandelte Fehler
-[X] Automatisierte Tests: 249 pytest-Tests in backend/tests/ gegen eine
+[X] Automatisierte Tests: 251 pytest-Tests in backend/tests/ gegen eine
     temporäre SQLite-Datenbank (conftest.py) – Rechnungen, Angebote,
     Lieferscheine, Kunden/Artikel (inkl. CSV-/JSON-Import und -Export),
     Admin-Endpunkte, Auswertungen (inkl. freiem Report-Builder), Response-Cache,
     Audit-Log und die Sicherheitsschicht. Start mit `python -m pytest` in
-    backend/. Dazu 95 Frontend-Tests in backend/tests/frontend/, die die
+    backend/. Dazu 110 Frontend-Tests in backend/tests/frontend/, die die
     echte index.html und app.js in jsdom fahren (Kundenauswahl inkl.
     Vorauswahl des besten Treffers, Entwurfsspeicher, schließbare Banner,
     Logo-Upload, Kunden-/Artikelimport und -export, Beispieldateien als
-    CSV/JSON, Listenfilter, Lieferscheinliste, Umwandlung Angebot ->
+    CSV/JSON für Massen- und Einzelimport, Listenfilter, Lieferscheinliste, Umwandlung Angebot ->
     Rechnung, gesperrte Doppelumwandlungen, Bearbeitungssperre auf Angebot
     und Lieferschein, Sprung in die Rechnungsübersicht nach dem Speichern,
     Gutschriften, Auswertungen samt Report-Builder, Monitoring, PDF-Vorlagen,
@@ -226,12 +226,26 @@ erledigt, wird er dort auf [X] gesetzt und im CHANGELOG mit Datum vermerkt.
     Datei aus dem DSGVO-Export je Kunde, Export und Import passen also
     zusammen. Der Knopf öffnet direkt den Dateidialog, die Auswahl startet
     den Import; eine sichtbare Dateiauswahl gibt es nicht mehr.
-[X] Vorlage für den Import in beiden Formaten: „📄 Beispieldatei
-    herunterladen“ öffnet ein kleines Auswahlfenster (CSV oder JSON) und
-    liefert kunden-vorlage.csv bzw. kunden-vorlage.json. Beide entstehen aus
-    denselben Beispieldaten (app.js: EXAMPLE_CUSTOMERS), und je ein
-    Backend-Test liest sie wieder ein, damit die Vorlage nicht vom Import
-    abdriftet. Klick daneben oder Escape schließt das Fenster.
+[X] Beispieldateien für alles, was sich importieren lässt – Kunden und
+    Artikel, je als Massenimport (drei Datensätze) und als Einzelsatz, je in
+    CSV und JSON, also acht Vorlagen. „📄 Beispieldatei herunterladen“ steht
+    jetzt in beiden Ansichten und fragt in einem kleinen Fenster nach Format
+    und Umfang; Klick daneben oder Escape schließt das Fenster.
+    Dateinamen: kunden-vorlage.csv/.json, kunden-vorlage-einzeln.csv/.json,
+    artikel-vorlage.csv/.json, artikel-vorlage-einzeln.csv/.json. Alle acht
+    entstehen im Browser aus denselben Beispieldaten (app.js:
+    EXAMPLE_CUSTOMERS, EXAMPLE_PRODUCTS) über je eine Vorlagenbeschreibung
+    (CUSTOMER_EXAMPLE/PRODUCT_EXAMPLE: Spaltenüberschriften, Feldnamen,
+    JSON-Schlüssel, Dateiname), damit sie nicht auseinanderlaufen; ein
+    weiteres Feld kommt an genau einer Stelle dazu. Das Einzelsatz-JSON hat
+    die Form {"customer": {...}} bzw. {"product": {...}} – dieselbe Form wie
+    der DSGVO-Export je Kunde, und eine, die der Import ohnehin schon
+    versteht. Auf-/Zu-Mechanik beider Fenster in einer Funktion
+    (setupExampleMenu). Vier Backend-Tests lesen alle acht Dateien wieder
+    ein, damit keine Vorlage vom Import abdriftet.
+    Mehr gibt es nicht zu importieren: Logo-Upload (Bild) und
+    Backup-Wiederherstellung (Datenbankauszug) sind keine Datenimporte, für
+    die sich eine Beispieldatei anlegen ließe.
 [X] Die Kundenliste läuft nicht mehr über den Kartenrand hinaus: die breiten
     Listen sitzen in einem `.table-scroll`-Container mit eigener
     Querscrollleiste, die Adressspalte bricht um (`.cell-wrap`)
@@ -436,6 +450,17 @@ Aktuell nichts Neues.
 --------------------------------------------------------------------------------
 12. CHANGELOG
 --------------------------------------------------------------------------------
+2026-09-01, dreizehnter Durchgang
+  * Beispieldateien für alles, was sich importieren lässt: Kunden und Artikel,
+    je als Massenimport und als Einzelsatz, je in CSV und JSON – acht
+    Vorlagen statt bisher zwei. Der Artikelimport hat den Knopf „📄
+    Beispieldatei herunterladen“ überhaupt zum ersten Mal (Abschnitt 4).
+  * Die Vorlagen entstehen jetzt aus einer Beschreibung je Import
+    (CUSTOMER_EXAMPLE/PRODUCT_EXAMPLE) statt aus fest zusammengebauten
+    Zeichenketten, das Auf-/Zu-Verhalten beider Auswahlfenster steckt in
+    setupExampleMenu statt zweimal im Code.
+  * Teststand: 251 Backend- und 110 Frontend-Tests.
+
 2026-08-31, zwölfter Durchgang
   * Dashboard-Diagramm zeigt auf dem Handy nur die letzten drei Monate statt
     aller sechs (Abschnitt 10).
